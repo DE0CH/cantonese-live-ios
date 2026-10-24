@@ -2,7 +2,8 @@ import AVFoundation
 import Foundation
 
 /// Streams 16 kHz mono PCM s16le to the relay (wss://RelayHost/ws?provider=…) and collects the transcript.
-/// The relay sends {"type":"text","commit","pending"}: commit is appended for good, pending replaces the last pending.
+/// The relay sends {"type":"text","commit","pending"}: commit is appended for good ("\n" ends a line), pending replaces
+/// the last pending. With style=written it also sends {"type":"rewrite","line","text"}: line n of this stream in 書面語.
 @MainActor
 final class Transcriber: ObservableObject {
     enum Provider: String, CaseIterable, Identifiable {
@@ -10,9 +11,15 @@ final class Transcriber: ObservableObject {
         var id: String { rawValue }
         var label: String { self == .soniox ? "Soniox" : "Fun-ASR" }
     }
+    enum Style: String, CaseIterable, Identifiable {
+        case spoken, written
+        var id: String { rawValue }
+        var label: String { self == .spoken ? "口語" : "書面語" }
+    }
     enum State: Equatable { case idle, connecting, listening, failed(String) }
 
-    @Published var committed = ""
+    @Published private(set) var lines = [""]
+    var committed: String { lines.joined(separator: "\n") }
     @Published var pending = ""
     @Published var state: State = .idle
     @Published var provider: Provider {
@@ -21,6 +28,14 @@ final class Transcriber: ObservableObject {
             if oldValue != provider, isRunning { stop(); start() }   // switching mid-stream restarts on the new engine
         }
     }
+    @Published var style: Style {
+        didSet {
+            UserDefaults.standard.set(style.rawValue, forKey: "style")
+            if oldValue != style, isRunning { stop(); start() }
+        }
+    }
+    /// lines[base + n] is line n of the current stream.
+    private var base = 0
 
     var isRunning: Bool { state == .connecting || state == .listening }
 
@@ -33,6 +48,7 @@ final class Transcriber: ObservableObject {
 
     init() {
         provider = Provider(rawValue: UserDefaults.standard.string(forKey: "provider") ?? "") ?? .soniox
+        style = Style(rawValue: UserDefaults.standard.string(forKey: "style") ?? "") ?? .spoken
     }
 
     func start() {
@@ -40,7 +56,9 @@ final class Transcriber: ObservableObject {
         state = .connecting
         let info = Bundle.main.infoDictionary ?? [:]
         let host = (info["RelayHost"] as? String) ?? ""
-        guard !host.isEmpty, let url = URL(string: "wss://\(host)/ws?provider=\(provider.rawValue)") else {
+        if lines.last?.isEmpty == false { lines.append("") }
+        base = lines.count - 1
+        guard !host.isEmpty, let url = URL(string: "wss://\(host)/ws?provider=\(provider.rawValue)&style=\(style.rawValue)") else {
             state = .failed("未設定伺服器"); return
         }
         var request = URLRequest(url: url)
@@ -62,12 +80,12 @@ final class Transcriber: ObservableObject {
         socket = nil
         stopAudio()
         task.send(.string("stop")) { _ in }
-        // Let the last results arrive, then close.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 3) { task.cancel(with: .normalClosure, reason: nil) }
+        // The relay closes after the last results (and 書面語 rewrites); give up after 15 s.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 15) { task.cancel(with: .normalClosure, reason: nil) }
         state = .idle
     }
 
-    func clear() { committed = ""; pending = "" }
+    func clear() { lines = [""]; base = 0; pending = "" }
 
     private func fail(_ message: String) {
         stopAudio()
@@ -107,8 +125,14 @@ final class Transcriber: ObservableObject {
         switch type {
         case "ready": if socket === task { state = .listening }
         case "text":
-            committed += (m["commit"] as? String) ?? ""
+            let parts = ((m["commit"] as? String) ?? "").components(separatedBy: "\n")
+            lines[lines.count - 1] += parts[0]
+            lines += parts.dropFirst()
             pending = (m["pending"] as? String) ?? ""
+        case "rewrite":
+            if let n = m["line"] as? Int, let text = m["text"] as? String, lines.indices.contains(base + n) {
+                lines[base + n] = text
+            }
         case "error": if socket === task { fail((m["message"] as? String) ?? "出錯") }
         case "done": pending = ""
         default: break
