@@ -1,0 +1,97 @@
+# Builds the iOS app on a GitHub macOS runner, walks every flow on an iPhone 17 simulator against the live relay (the
+# phone replica, streaming the bundled Cantonese clip through both engines), then archives UNSIGNED and lets the export
+# cloud-sign with Apple's managed distribution certificate (App Store Connect API key) and upload to TestFlight.
+# The relay host and the Access service token reach the app only through ios/Secrets.xcconfig, written here from the
+# repo's GitHub secrets.
+name: ios
+on:
+  workflow_dispatch:
+    inputs:
+      upload: { description: "Upload to TestFlight", type: boolean, default: true }
+  push:
+    branches: [main]
+    paths: ["ios/**", "testdata/**", ".github/workflows/ios.yml"]
+  workflow_run:
+    workflows: [relay]
+    types: [completed]
+concurrency: { group: ios, cancel-in-progress: false }
+permissions: { contents: read }
+defaults:
+  run:
+    shell: bash -eo pipefail {0}
+    working-directory: ios
+jobs:
+  build:
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
+    runs-on: macos-26
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - name: Xcode, xcodegen, secrets
+        env:
+          CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
+          CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
+          BUILD_NUMBER: ${{ github.run_number }}
+        run: |
+          XCODE=$(ls -d /Applications/Xcode_*.app | grep -v -i beta | sort -V | tail -1)
+          echo "Using $XCODE"; sudo xcode-select -s "$XCODE"; xcodebuild -version
+          brew list xcodegen >/dev/null 2>&1 || brew install xcodegen
+          umask 077
+          printf 'RELAY_HOST = cantonese.deyaochen.com\nCF_ACCESS_CLIENT_ID = %s\nCF_ACCESS_CLIENT_SECRET = %s\n' "$CF_ACCESS_CLIENT_ID" "$CF_ACCESS_CLIENT_SECRET" > Secrets.xcconfig
+          sed -i '' "s/BUILD_NUMBER: \"1\"/BUILD_NUMBER: \"$BUILD_NUMBER\"/" project.yml
+          xcodegen generate --quiet
+      - name: Phone replica (iPhone 17 simulator, every flow, live relay)
+        id: replica
+        timeout-minutes: 25
+        run: |
+          UDID=$(xcrun simctl list devices available -j | python3 -c "
+          import json,sys,re
+          d=json.load(sys.stdin)['devices']
+          rts=sorted((k for k in d if 'iOS' in k), key=lambda k:[int(x) for x in re.findall(r'\d+',k)])
+          for rt in reversed(rts):
+              for dev in d[rt]:
+                  if dev['name']=='iPhone 17': print(dev['udid']); sys.exit()
+          ")
+          [ -n "$UDID" ] || { echo "no iPhone 17 simulator"; exit 1; }
+          xcrun simctl boot "$UDID" 2>/dev/null || true
+          xcodebuild test -project Cantonese.xcodeproj -scheme Cantonese -configuration Release -destination "id=$UDID" \
+            -resultBundlePath "$RUNNER_TEMP/ui.xcresult" CODE_SIGN_IDENTITY=- CODE_SIGNING_REQUIRED=NO > "$RUNNER_TEMP/test.log" 2>&1 || true
+          grep -E "error:|\*\* TEST|Test Case .*(passed|failed)|TRANSCRIPT|XCTAssert" "$RUNNER_TEMP/test.log" | head -40 || true
+          mkdir -p "$RUNNER_TEMP/screens"
+          xcrun xcresulttool export attachments --path "$RUNNER_TEMP/ui.xcresult" --output-path "$RUNNER_TEMP/att" >/dev/null 2>&1 || true
+          python3 - "$RUNNER_TEMP/att" "$RUNNER_TEMP/screens" <<'PY' || true
+          import json, os, shutil, sys
+          src, dst = sys.argv[1:]
+          n = 0
+          for t in json.load(open(os.path.join(src, "manifest.json"))):
+              for a in t.get("attachments", []):
+                  f = a.get("exportedFileName", "")
+                  if f.endswith(".png"):
+                      n += 1; shutil.copy(os.path.join(src, f), os.path.join(dst, "%02d-%s.png" % (n, a.get("suggestedHumanReadableName", f).split("_")[0])))
+          print(f"screenshots: {n}")
+          PY
+          grep -q "\*\* TEST SUCCEEDED \*\*" "$RUNNER_TEMP/test.log"
+      - name: Keep the replica screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with: { name: replica-screens, path: "${{ runner.temp }}/screens/*.png", if-no-files-found: ignore }
+      - name: Archive (unsigned)
+        if: github.event_name != 'workflow_dispatch' || inputs.upload
+        run: |
+          xcodebuild archive -project Cantonese.xcodeproj -scheme Cantonese -configuration Release -destination 'generic/platform=iOS' \
+            -archivePath "$RUNNER_TEMP/app.xcarchive" CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" > "$RUNNER_TEMP/archive.log" 2>&1 || true
+          grep -E "error:|\*\* ARCHIVE" "$RUNNER_TEMP/archive.log" | head -40 || true
+          grep -q "ARCHIVE SUCCEEDED" "$RUNNER_TEMP/archive.log"
+      - name: Export, cloud-sign and upload to TestFlight
+        if: github.event_name != 'workflow_dispatch' || inputs.upload
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_PRIVATE_KEY: ${{ secrets.ASC_PRIVATE_KEY }}
+        run: |
+          KEY="$RUNNER_TEMP/AuthKey_$ASC_KEY_ID.p8"; printf '%s\n' "$ASC_PRIVATE_KEY" > "$KEY"; trap 'rm -f "$KEY"' EXIT
+          xcodebuild -exportArchive -archivePath "$RUNNER_TEMP/app.xcarchive" -exportOptionsPlist ExportOptions.plist \
+            -exportPath "$RUNNER_TEMP/export" -allowProvisioningUpdates -authenticationKeyPath "$KEY" \
+            -authenticationKeyID "$ASC_KEY_ID" -authenticationKeyIssuerID "$ASC_ISSUER_ID" > "$RUNNER_TEMP/export.log" 2>&1 || true
+          grep -E "error|EXPORT|Upload|Uploaded|uploaded" "$RUNNER_TEMP/export.log" | sed "s#$RUNNER_TEMP/##" | tail -n 25 || true
+          grep -qE "EXPORT SUCCEEDED|Upload succeeded|Uploaded" "$RUNNER_TEMP/export.log"
