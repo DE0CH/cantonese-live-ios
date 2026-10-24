@@ -1,5 +1,5 @@
 # Builds the iOS app on a GitHub macOS runner, walks every flow on an iPhone 17 simulator against the live relay (the
-# phone replica, streaming the bundled Cantonese clip in 原文 and 書面語), then archives UNSIGNED and lets the export
+# phone replica, streaming the bundled Cantonese clip), then archives UNSIGNED and lets the export
 # cloud-sign with Apple's managed distribution certificate (App Store Connect API key) and upload to TestFlight.
 # The relay host and the Access service token reach the app only through ios/Secrets.xcconfig, written here from the
 # repo's GitHub secrets.

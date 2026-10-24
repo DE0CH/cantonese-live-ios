@@ -6,16 +6,8 @@ struct ContentView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack {
-                Text("粵語即時字幕").font(.headline)
-                Spacer()
-                Picker("寫法", selection: $t.style) {
-                    ForEach(Transcriber.Style.allCases) { Text($0.label).tag($0) }
-                }
-                .pickerStyle(.segmented)
-                .frame(width: 170)
-                .accessibilityIdentifier("style")
-            }
+            Text("粵語即時字幕").font(.headline)
+                .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, 16).padding(.vertical, 12)
             Divider()
             ScrollViewReader { proxy in
