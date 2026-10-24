@@ -3,6 +3,10 @@
 Live transcription of Cantonese (mixed with Mandarin and English) by Soniox (`stt-rt-v5`), as spoken, in Hong Kong
 Traditional characters. Nothing is stored.
 
+A dropped connection reconnects by itself while the mic keeps recording; only 停止 ends a session. On desktop,
+「彈出視窗」 moves the subtitles into a narrow always-on-top window (Document Picture-in-Picture in Chrome/Edge, a plain
+popup elsewhere).
+
 - `relay/`: a Cloudflare Worker at `cantonese.deyaochen.com` (behind Cloudflare Access) that serves the web page,
   relays 16 kHz PCM from the clients to Soniox over WebSockets (holding the keys), converts the text to Hong Kong
   Traditional with OpenCC.

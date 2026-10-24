@@ -58,6 +58,7 @@ struct ContentView: View {
         case .idle: return " "
         case .connecting: return "連接緊…"
         case .listening: return "● 聽緊"
+        case .reconnecting: return "連線斷咗，重新連接緊…"
         case .failed(let m): return m
         }
     }

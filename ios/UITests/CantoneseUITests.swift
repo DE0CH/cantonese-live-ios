@@ -32,6 +32,28 @@ final class CantoneseUITests: XCTestCase {
         shot(app, "cleared")
     }
 
+    /// The connection is cut 3 s into the clip: the app says it is reconnecting, comes back by itself, and the audio
+    /// from the gap still reaches the transcript.
+    func testReconnect() throws {
+        let app = XCUIApplication()
+        app.launchEnvironment["CANTONESE_TEST_AUDIO"] = "1"
+        app.launchEnvironment["CANTONESE_TEST_DROP"] = "1"
+        app.launch()
+        app.buttons["clear"].tap()
+        app.buttons["mic"].tap()
+        XCTAssertTrue(app.staticTexts["連線斷咗，重新連接緊…"].waitForExistence(timeout: 20), "never reconnected (\(status(app)))")
+        shot(app, "reconnecting")
+        XCTAssertTrue(app.buttons["mic"].label == "停止", "a dropped connection stopped the session")
+        XCTAssertTrue(app.staticTexts["● 聽緊"].waitForExistence(timeout: 20), "never came back (\(status(app)))")
+        Thread.sleep(forTimeInterval: 10)         // the held audio and the rest of the clip
+        app.buttons["mic"].tap()
+        Thread.sleep(forTimeInterval: 3)
+        shot(app, "reconnected")
+        let text = app.staticTexts["transcript"].label
+        print("TRANSCRIPT (reconnect): \(text)")
+        XCTAssertTrue(text.contains("聽日"), "lost the audio after the drop: \(text)")
+    }
+
     private func status(_ app: XCUIApplication) -> String { app.staticTexts["status"].label }
 
     private func shot(_ app: XCUIApplication, _ name: String) {
