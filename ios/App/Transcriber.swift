@@ -1,20 +1,15 @@
 import AVFoundation
 import Foundation
 
-/// Streams 16 kHz mono PCM s16le to the relay (wss://RelayHost/ws?provider=…) and collects the transcript.
+/// Streams 16 kHz mono PCM s16le to the relay (wss://RelayHost/ws?style=raw|written) and collects the transcript.
 /// The relay sends {"type":"text","commit","pending"}: commit is appended for good ("\n" ends a line), pending replaces
 /// the last pending. With style=written it also sends {"type":"rewrite","line","text"}: line n of this stream in 書面語.
 @MainActor
 final class Transcriber: ObservableObject {
-    enum Provider: String, CaseIterable, Identifiable {
-        case soniox, funasr
-        var id: String { rawValue }
-        var label: String { self == .soniox ? "Soniox" : "Fun-ASR" }
-    }
     enum Style: String, CaseIterable, Identifiable {
-        case spoken, written
+        case raw, written
         var id: String { rawValue }
-        var label: String { self == .spoken ? "口語" : "書面語" }
+        var label: String { self == .raw ? "原文" : "書面語" }
     }
     enum State: Equatable { case idle, connecting, listening, failed(String) }
 
@@ -22,16 +17,10 @@ final class Transcriber: ObservableObject {
     var committed: String { lines.joined(separator: "\n") }
     @Published var pending = ""
     @Published var state: State = .idle
-    @Published var provider: Provider {
-        didSet {
-            UserDefaults.standard.set(provider.rawValue, forKey: "provider")
-            if oldValue != provider, isRunning { stop(); start() }   // switching mid-stream restarts on the new engine
-        }
-    }
     @Published var style: Style {
         didSet {
             UserDefaults.standard.set(style.rawValue, forKey: "style")
-            if oldValue != style, isRunning { stop(); start() }
+            if oldValue != style, isRunning { stop(); start() }   // switching mid-stream restarts in the new style
         }
     }
     /// lines[base + n] is line n of the current stream.
@@ -47,8 +36,7 @@ final class Transcriber: ObservableObject {
     private let testAudio = ProcessInfo.processInfo.environment["CANTONESE_TEST_AUDIO"] == "1"
 
     init() {
-        provider = Provider(rawValue: UserDefaults.standard.string(forKey: "provider") ?? "") ?? .soniox
-        style = Style(rawValue: UserDefaults.standard.string(forKey: "style") ?? "") ?? .spoken
+        style = Style(rawValue: UserDefaults.standard.string(forKey: "style") ?? "") ?? .raw
     }
 
     func start() {
@@ -58,7 +46,7 @@ final class Transcriber: ObservableObject {
         let host = (info["RelayHost"] as? String) ?? ""
         if lines.last?.isEmpty == false { lines.append("") }
         base = lines.count - 1
-        guard !host.isEmpty, let url = URL(string: "wss://\(host)/ws?provider=\(provider.rawValue)&style=\(style.rawValue)") else {
+        guard !host.isEmpty, let url = URL(string: "wss://\(host)/ws?style=\(style.rawValue)") else {
             state = .failed("未設定伺服器"); return
         }
         var request = URLRequest(url: url)
