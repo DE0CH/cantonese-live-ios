@@ -13,11 +13,11 @@ struct ContentView: View {
             ScrollViewReader { proxy in
                 ScrollView {
                     VStack(alignment: .leading) {
-                        if t.committed.isEmpty && t.pending.isEmpty {
+                        if t.committed.isEmpty && t.parts.allSatisfy({ $0.commit.isEmpty && $0.pending.isEmpty }) {
                             Text("撳「開始」，對住咪講廣東話，字幕會即時出現。")
                                 .font(.body).foregroundStyle(.secondary)
                         }
-                        (Text(t.committed) + Text(t.pending).foregroundColor(.secondary))
+                        t.parts.reduce(Text(t.committed)) { $0 + Text($1.commit) + Text($1.pending).foregroundColor(.secondary) }
                             .font(.system(size: 26))
                             .lineSpacing(8)
                             .frame(maxWidth: .infinity, alignment: .leading)
@@ -27,7 +27,7 @@ struct ContentView: View {
                     }
                     .padding(16)
                 }
-                .onChange(of: t.committed + t.pending) { _, _ in
+                .onChange(of: t.committed + t.parts.map { $0.commit + $0.pending }.joined()) { _, _ in
                     withAnimation(.easeOut(duration: 0.15)) { proxy.scrollTo("end", anchor: .bottom) }
                 }
             }
@@ -58,7 +58,7 @@ struct ContentView: View {
         case .idle: return " "
         case .connecting: return "連接緊…"
         case .listening: return "● 聽緊"
-        case .reconnecting: return "連線斷咗，重新連接緊…"
+        case .unstable: return "網絡唔穩，仲錄緊音…"
         case .failed(let m): return m
         }
     }

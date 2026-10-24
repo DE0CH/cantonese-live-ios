@@ -32,25 +32,31 @@ final class CantoneseUITests: XCTestCase {
         shot(app, "cleared")
     }
 
-    /// The connection is cut 3 s into the clip: the app says it is reconnecting, comes back by itself, and the audio
-    /// from the gap still reaches the transcript.
-    func testReconnect() throws {
+    /// The network goes down for 3 s, 3 s into the clip: nothing shows it, and the transcript has every word exactly once
+    /// (the backlog is over 1.5 s, so this also walks the split into a catch-up and a live segment).
+    func testDropIsInvisible() throws {
         let app = XCUIApplication()
         app.launchEnvironment["CANTONESE_TEST_AUDIO"] = "1"
-        app.launchEnvironment["CANTONESE_TEST_DROP"] = "1"
+        app.launchEnvironment["CANTONESE_TEST_DROP"] = "3"
         app.launch()
         app.buttons["clear"].tap()
         app.buttons["mic"].tap()
-        XCTAssertTrue(app.staticTexts["連線斷咗，重新連接緊…"].waitForExistence(timeout: 20), "never reconnected (\(status(app)))")
-        shot(app, "reconnecting")
-        XCTAssertTrue(app.buttons["mic"].label == "停止", "a dropped connection stopped the session")
-        XCTAssertTrue(app.staticTexts["● 聽緊"].waitForExistence(timeout: 20), "never came back (\(status(app)))")
-        Thread.sleep(forTimeInterval: 10)         // the held audio and the rest of the clip
+        XCTAssertTrue(app.staticTexts["● 聽緊"].waitForExistence(timeout: 20), "never started listening (\(status(app)))")
+        var statuses: Set<String> = []
+        let deadline = Date().addingTimeInterval(14)   // the 7.5 s clip, the outage and the catch-up
+        while Date() < deadline {
+            statuses.insert(status(app))
+            XCTAssertEqual(app.buttons["mic"].label, "停止", "the drop stopped the session")
+            Thread.sleep(forTimeInterval: 0.2)
+        }
+        shot(app, "after-drop")
         app.buttons["mic"].tap()
-        Thread.sleep(forTimeInterval: 3)
-        shot(app, "reconnected")
+        Thread.sleep(forTimeInterval: 4)
+        shot(app, "stopped-after-drop")
         let text = app.staticTexts["transcript"].label
-        print("TRANSCRIPT (reconnect): \(text)")
+        print("TRANSCRIPT (drop): \(text) STATUSES: \(statuses)")
+        XCTAssertEqual(statuses, ["● 聽緊"], "the drop showed in the status")
+        XCTAssertEqual(text.components(separatedBy: "飲茶").count - 1, 1, "lost or repeated words: \(text)")
         XCTAssertTrue(text.contains("聽日"), "lost the audio after the drop: \(text)")
     }
 

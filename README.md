@@ -3,7 +3,8 @@
 Live transcription of Cantonese (mixed with Mandarin and English) by Soniox (`stt-rt-v5`), as spoken, in Hong Kong
 Traditional characters. Nothing is stored.
 
-A dropped connection reconnects by itself while the mic keeps recording; only 停止 ends a session. On desktop,
+Network drops are invisible: the clients keep the audio Soniox hasn't finalized, reconnect at once and replay it, and
+split a long backlog onto its own connection so live subtitles never lag (see `relay/src/index.js` and `Transcriber.swift`). On desktop,
 「彈出視窗」 moves the subtitles into a narrow always-on-top window (Document Picture-in-Picture in Chrome/Edge, a plain
 popup elsewhere).
 
