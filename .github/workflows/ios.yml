@@ -49,6 +49,8 @@ jobs:
             -resultBundlePath "$RUNNER_TEMP/ui.xcresult" -skipPackagePluginValidation -skipMacroValidation CODE_SIGN_IDENTITY=- CODE_SIGNING_REQUIRED=NO > "$RUNNER_TEMP/test.log" 2>&1 || true
           grep -E "error:|\*\* TEST|Test Case .*(passed|failed)|TRANSCRIPT|XCTAssert" "$RUNNER_TEMP/test.log" | head -40 || true
           grep -A12 -E "The following build commands failed|Testing failed:" "$RUNNER_TEMP/test.log" | head -60 || true
+          xcrun simctl spawn "$UDID" log show --last 90m --style compact --info \
+            --predicate 'subsystem == "dev.de0ch.cantonese"' 2>/dev/null | tail -60 || true
           mkdir -p "$RUNNER_TEMP/screens"
           xcrun xcresulttool export attachments --path "$RUNNER_TEMP/ui.xcresult" --output-path "$RUNNER_TEMP/att" >/dev/null 2>&1 || true
           python3 - "$RUNNER_TEMP/att" "$RUNNER_TEMP/screens" <<'PY' || true

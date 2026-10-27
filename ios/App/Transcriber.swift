@@ -2,6 +2,7 @@ import AVFoundation
 import CoreML
 import Foundation
 import OpenCC
+import os
 import Qwen3ASR
 import SpeechVAD
 
@@ -185,6 +186,7 @@ final class Transcriber: ObservableObject {
 
 /// The models and everything that touches them, on one serial queue.
 final class Worker: @unchecked Sendable {
+    static let log = Logger(subsystem: "dev.de0ch.cantonese", category: "model")
     struct Shown { let id: Int; let commit: String; let pending: String }
 
     /// Segments shown on screen and the text that just finished.
@@ -241,6 +243,7 @@ final class Worker: @unchecked Sendable {
             cacheDir: asrDir, offlineMode: true)
         let vad = try await SileroVADModel.fromPretrained(engine: .coreml, cacheDir: dir.appendingPathComponent("silero-vad"))
         let convert = try ChineseConverter(options: [.traditionalize, .hkStandard])
+        log.info("models loaded")
         let w = Worker(asr: asr, vad: vad, convert: convert)
         cached = w
         return w
@@ -311,6 +314,7 @@ final class Worker: @unchecked Sendable {
             preRoll += c
             if preRoll.count > Self.preRollSamples { preRoll.removeFirst(preRoll.count - Self.preRollSamples) }
             if prob >= Self.startProb {
+                Self.log.info("segment \(self.nextId) starts (vad \(prob))")
                 let s = Segment(id: nextId, samples: preRoll)
                 nextId += 1
                 segments.append(s)
@@ -322,6 +326,7 @@ final class Worker: @unchecked Sendable {
     }
 
     private func endCurrent() {
+        if let s = current { Self.log.info("segment \(s.id) ends: \(s.samples.count / 16) ms") }
         current?.ended = true
         current = nil
         silentChunks = 0
@@ -351,8 +356,15 @@ final class Worker: @unchecked Sendable {
     }
 
     private func transcribe(_ audio: [Float]) -> String {
-        let raw = (try? asr.transcribeWithoutMLX(audio: audio, sampleRate: 16000, language: nil, maxTokens: 200)) ?? ""
-        return convert.convert(raw.trimmingCharacters(in: .whitespacesAndNewlines))
+        let t0 = Date()
+        do {
+            let raw = try asr.transcribeWithoutMLX(audio: audio, sampleRate: 16000, language: nil, maxTokens: 200)
+            Self.log.info("transcribed \(audio.count / 16) ms of audio in \(Int(Date().timeIntervalSince(t0) * 1000)) ms: \(raw, privacy: .private)")
+            return convert.convert(raw.trimmingCharacters(in: .whitespacesAndNewlines))
+        } catch {
+            Self.log.error("transcription failed after \(Int(Date().timeIntervalSince(t0) * 1000)) ms: \(error.localizedDescription, privacy: .public)")
+            return ""
+        }
     }
 
     /// Finished segments at the front leave the list as committed lines.
