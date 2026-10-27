@@ -46,12 +46,7 @@ final class Transcriber: ObservableObject {
         state = .loading("載入模型…")
         loadTask = Task {
             do {
-                let worker = try await Worker.shared(progress: { [weak self] p in
-                    Task { @MainActor in
-                        guard let self, case .loading = self.state else { return }
-                        self.state = .loading(p >= 0.8 ? "載入模型…" : "下載模型 \(Int(p / 0.8 * 100))%（第一次要下載，約 950 MB）")
-                    }
-                })
+                let worker = try await Worker.shared()
                 try Task.checkCancellation()
                 worker.onUpdate = { [weak self] parts, finished in
                     Task { @MainActor in self?.show(parts, finished: finished) }
@@ -233,30 +228,27 @@ final class Worker: @unchecked Sendable {
 
     private static var cached: Worker?
 
-    /// Loads the models once (downloading them the first time) and keeps them for later sessions.
-    static func shared(progress: @escaping (Double) -> Void) async throws -> Worker {
+    /// Loads the models shipped inside the app (ios/fetch-model.sh puts them in Model/) once and keeps them.
+    static func shared() async throws -> Worker {
         if let w = cached { return w }
-        let dir = try modelDirectory()
+        guard let dir = Bundle.main.url(forResource: "Model", withExtension: nil) else {
+            throw CocoaError(.fileNoSuchFile)
+        }
         #if targetEnvironment(simulator)
         // On the simulator CoreML runs the model on the CPU at minutes per line, so the UI tests run everything but the
         // model: this stand-in answers each segment of the bundled clip with what the model says for it (in its
-        // Simplified output, so OpenCC still runs).
-        // The real model is heard on a Mac by the model-check workflow.
+        // Simplified output, so OpenCC still runs). The real model is heard on a Mac by the model-check workflow.
         let lines = ["我哋今日去咗饮茶，啲虾饺好好食。", "佢话听日会再嚟。"]
         var said = 0
         let asr: ([Float]) throws -> String = { _ in defer { said += 1 }; return lines[min(said, lines.count - 1)] }
         #else
-        // Neural Engine and CPU only: no GPU, so it runs with the screen locked too. The parts are loaded one by one
-        // because CoreMLASRModel.fromPretrained takes its tokenizer from an MLX repo and downloads its 708 MB of
-        // weights along with it; the tokenizer here is just the official vocab.
-        let asrDir = dir.appendingPathComponent("qwen3-asr-0.6b-coreml")
-        let encoder = try await CoreMLASREncoder.fromPretrained(
-            computeUnits: .cpuAndNeuralEngine, cacheDir: asrDir, progressHandler: { p, _ in progress(0.3 * p) })
-        let decoder = try await CoreMLTextDecoder.fromPretrained(
-            computeUnits: .cpuAndNeuralEngine, cacheDir: asrDir, progressHandler: { p, _ in progress(0.3 + 0.45 * p) })
-        let tokenizer = try await loadTokenizer(into: dir.appendingPathComponent("qwen3-asr-tokenizer"))
-        progress(0.8)
-        let model = CoreMLASRModel(encoder: encoder, decoder: decoder)
+        // Neural Engine and CPU only: no GPU, so it runs with the screen locked too.
+        let asrDir = dir.appendingPathComponent("asr")
+        let model = CoreMLASRModel(
+            encoder: try CoreMLASREncoder.load(from: asrDir, computeUnits: .cpuAndNeuralEngine),
+            decoder: try CoreMLTextDecoder.load(from: asrDir, computeUnits: .cpuAndNeuralEngine))
+        let tokenizer = Qwen3Tokenizer()
+        try tokenizer.load(from: dir.appendingPathComponent("tokenizer/vocab.json"))
         let asr: ([Float]) throws -> String = { audio in
             // With no tokenizer of its own the model answers with token ids ("151704 105043 …").
             let ids = try model.transcribeWithoutMLX(audio: audio, sampleRate: 16000, language: nil, maxTokens: 200)
@@ -265,39 +257,13 @@ final class Worker: @unchecked Sendable {
             return text.range(of: "<asr_text>").map { String(text[$0.upperBound...]) } ?? text
         }
         #endif
-        let vad = try await SileroVADModel.fromPretrained(engine: .coreml, cacheDir: dir.appendingPathComponent("silero-vad"))
+        let vad = try await SileroVADModel.fromPretrained(engine: .coreml, cacheDir: dir.appendingPathComponent("vad"),
+                                                          offlineMode: true)
         let convert = try ChineseConverter(options: [.traditionalize, .hkStandard])
         log.notice("models loaded")
         let w = Worker(asr: asr, vad: vad, convert: convert)
         cached = w
         return w
-    }
-
-    /// The Qwen3-ASR vocab (the decoder only needs ids → text), from the official model repo.
-    private static func loadTokenizer(into dir: URL) async throws -> Qwen3Tokenizer {
-        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        for name in ["vocab.json", "tokenizer_config.json"] {
-            let file = dir.appendingPathComponent(name)
-            guard !FileManager.default.fileExists(atPath: file.path) else { continue }
-            let url = URL(string: "https://huggingface.co/Qwen/Qwen3-ASR-0.6B/resolve/main/\(name)")!
-            let (tmp, response) = try await URLSession.shared.download(from: url)
-            guard (response as? HTTPURLResponse)?.statusCode == 200 else { throw URLError(.badServerResponse) }
-            try FileManager.default.moveItem(at: tmp, to: file)
-        }
-        let tokenizer = Qwen3Tokenizer()
-        try tokenizer.load(from: dir.appendingPathComponent("vocab.json"))
-        return tokenizer
-    }
-
-    /// Application Support/models, kept out of iCloud backups (the models download again).
-    private static func modelDirectory() throws -> URL {
-        var dir = try FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask,
-                                              appropriateFor: nil, create: true).appendingPathComponent("models")
-        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        var values = URLResourceValues()
-        values.isExcludedFromBackup = true
-        try dir.setResourceValues(values)
-        return dir
     }
 
     private init(asr: @escaping ([Float]) throws -> String, vad: SileroVADModel, convert: ChineseConverter) {

@@ -23,6 +23,15 @@ jobs:
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
+      - name: Models the app ships with (cached by the pinned revisions in fetch-model.sh)
+        uses: actions/cache@v4
+        with:
+          path: ios/Model
+          key: model-${{ hashFiles('ios/fetch-model.sh') }}
+      - name: Fetch the models
+        run: |
+          [ -d Model/asr/encoder.mlmodelc ] || { pip3 install -q --break-system-packages huggingface_hub && ./fetch-model.sh; }
+          du -sh Model/*
       - name: Xcode, xcodegen
         env:
           BUILD_NUMBER: ${{ github.run_number }}

@@ -1,5 +1,6 @@
 # XcodeGen spec (CI runs `xcodegen generate`; the .xcodeproj is not committed). The app transcribes on the phone
-# (Qwen3-ASR 0.6B on the Neural Engine through CoreML, downloaded from Hugging Face on first use), so it has no server and no secrets.
+# (Qwen3-ASR 0.6B on the Neural Engine through CoreML, shipped inside the app: `./fetch-model.sh` puts it in Model/
+# first), so it has no server and no secrets.
 name: Cantonese
 options:
   bundleIdPrefix: dev.de0ch
@@ -27,6 +28,9 @@ targets:
     sources:
       - path: App
       - path: ../testdata/cantonese-16k.wav
+        buildPhase: resources
+      - path: Model
+        type: folder
         buildPhase: resources
     dependencies:
       - package: SpeechSwift

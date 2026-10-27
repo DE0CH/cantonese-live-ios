@@ -14,7 +14,8 @@ popup elsewhere).
   Traditional with OpenCC.
 - `ios/`: the native SwiftUI app (TestFlight, `dev.de0ch.cantonese`). It transcribes on the phone with no network:
   Silero VAD cuts the mic audio at pauses, each segment is transcribed by Qwen3-ASR 0.6B (int8 CoreML,
-  `aufklarer/Qwen3-ASR-CoreML`, downloaded from Hugging Face on the first start, about 950 MB) through speech-swift's
+  `aufklarer/Qwen3-ASR-CoreML`, about 940 MB, shipped inside the app: `ios/fetch-model.sh` fetches it at pinned
+  revisions into `ios/Model` before a build) through speech-swift's
   MLX-free CoreML path on the Neural Engine and CPU (no GPU, so it keeps going with the screen locked), and converted
   to HK Traditional with OpenCC. The screen stays awake while listening.
 - `scripts/relay-test.mjs`: streams `testdata/cantonese-16k.wav` through the live relay.
