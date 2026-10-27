@@ -243,7 +243,7 @@ final class Worker: @unchecked Sendable {
             cacheDir: asrDir, offlineMode: true)
         let vad = try await SileroVADModel.fromPretrained(engine: .coreml, cacheDir: dir.appendingPathComponent("silero-vad"))
         let convert = try ChineseConverter(options: [.traditionalize, .hkStandard])
-        log.info("models loaded")
+        log.notice("models loaded")
         let w = Worker(asr: asr, vad: vad, convert: convert)
         cached = w
         return w
@@ -314,7 +314,7 @@ final class Worker: @unchecked Sendable {
             preRoll += c
             if preRoll.count > Self.preRollSamples { preRoll.removeFirst(preRoll.count - Self.preRollSamples) }
             if prob >= Self.startProb {
-                Self.log.info("segment \(self.nextId) starts (vad \(prob))")
+                Self.log.notice("segment \(self.nextId) starts (vad \(prob))")
                 let s = Segment(id: nextId, samples: preRoll)
                 nextId += 1
                 segments.append(s)
@@ -326,7 +326,7 @@ final class Worker: @unchecked Sendable {
     }
 
     private func endCurrent() {
-        if let s = current { Self.log.info("segment \(s.id) ends: \(s.samples.count / 16) ms") }
+        if let s = current { Self.log.notice("segment \(s.id) ends: \(s.samples.count / 16) ms") }
         current?.ended = true
         current = nil
         silentChunks = 0
@@ -359,7 +359,7 @@ final class Worker: @unchecked Sendable {
         let t0 = Date()
         do {
             let raw = try asr.transcribeWithoutMLX(audio: audio, sampleRate: 16000, language: nil, maxTokens: 200)
-            Self.log.info("transcribed \(audio.count / 16) ms of audio in \(Int(Date().timeIntervalSince(t0) * 1000)) ms: \(raw, privacy: .private)")
+            Self.log.notice("transcribed \(audio.count / 16) ms of audio in \(Int(Date().timeIntervalSince(t0) * 1000)) ms: \(raw, privacy: .private)")
             return convert.convert(raw.trimmingCharacters(in: .whitespacesAndNewlines))
         } catch {
             Self.log.error("transcription failed after \(Int(Date().timeIntervalSince(t0) * 1000)) ms: \(error.localizedDescription, privacy: .public)")
