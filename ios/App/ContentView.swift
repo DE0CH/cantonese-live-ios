@@ -14,7 +14,7 @@ struct ContentView: View {
                 ScrollView {
                     VStack(alignment: .leading) {
                         if t.committed.isEmpty && t.parts.allSatisfy({ $0.commit.isEmpty && $0.pending.isEmpty }) {
-                            Text("撳「開始」，對住咪講廣東話，字幕會即時出現。")
+                            Text("撳「開始」，對住咪講廣東話，字幕會即時出現。全部喺部手機度轉，唔使上網。")
                                 .font(.body).foregroundStyle(.secondary)
                         }
                         t.parts.reduce(Text(t.committed)) { $0 + Text($1.commit) + Text($1.pending).foregroundColor(.secondary) }
@@ -56,9 +56,8 @@ struct ContentView: View {
     private var statusText: String {
         switch t.state {
         case .idle: return " "
-        case .connecting: return "連接緊…"
+        case .loading(let m): return m
         case .listening: return "● 聽緊"
-        case .unstable: return "網絡唔穩，仲錄緊音…"
         case .failed(let m): return m
         }
     }

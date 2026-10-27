@@ -1,6 +1,8 @@
 import XCTest
 
-/// The phone replica: walks every flow against the live relay, streaming the bundled Cantonese clip instead of the mic.
+/// The phone replica: walks every flow on the simulator, streaming the bundled Cantonese clip instead of the mic.
+/// The first start downloads the model from Hugging Face; the simulator runs it on the CPU (no Neural Engine), so the
+/// waits are long.
 final class CantoneseUITests: XCTestCase {
     func testEveryFlow() throws {
         let app = XCUIApplication()
@@ -10,54 +12,39 @@ final class CantoneseUITests: XCTestCase {
 
         app.buttons["clear"].tap()
         app.buttons["mic"].tap()
-        XCTAssertTrue(app.staticTexts["● 聽緊"].waitForExistence(timeout: 20), "never started listening (\(status(app)))")
-        let transcript = app.staticTexts["transcript"]
-        let deadline = Date().addingTimeInterval(30)
-        while Date() < deadline, transcript.label.unicodeScalars.filter({ (0x4E00...0x9FFF).contains($0.value) }).count < 6 {
-            Thread.sleep(forTimeInterval: 0.5)
+        var sawDownload = false
+        let ready = Date().addingTimeInterval(20 * 60)
+        while Date() < ready, status(app) != "● 聽緊" {
+            if status(app).hasPrefix("下載模型") && !sawDownload { sawDownload = true; shot(app, "downloading") }
+            if status(app).hasPrefix("用唔到") { break }
+            Thread.sleep(forTimeInterval: 1)
         }
-        shot(app, "live")
-        Thread.sleep(forTimeInterval: 6)          // the rest of the 7.5 s clip
-        app.buttons["mic"].tap()                  // 停止
-        Thread.sleep(forTimeInterval: 3)
-        shot(app, "stopped")
-        let text = transcript.label
+        XCTAssertEqual(status(app), "● 聽緊", "never started listening (\(status(app)))")
+        shot(app, "listening")
+
+        // The 7.5 s clip and a second of silence end one segment; its transcription lands as a committed line.
+        let transcript = app.staticTexts["transcript"]
+        let deadline = Date().addingTimeInterval(10 * 60)
+        while Date() < deadline, !(transcript.exists && transcript.label.contains("我哋")) {
+            Thread.sleep(forTimeInterval: 2)
+        }
+        shot(app, "transcribed")
+        let text = transcript.exists ? transcript.label : ""
         print("TRANSCRIPT: \(text)")
-        XCTAssertTrue(text.contains("我哋"), "lost the spoken form: \(text)")
-        XCTAssertGreaterThanOrEqual(text.unicodeScalars.filter { (0x4E00...0x9FFF).contains($0.value) }.count, 6,
-                                    "no Cantonese text (\(status(app)))")
+        XCTAssertTrue(text.contains("我哋"), "lost the spoken form: \(text) (\(status(app)))")
+        XCTAssertTrue(text.contains("飲茶"), "not HK Traditional: \(text)")
+
+        app.buttons["mic"].tap()                  // 停止
+        XCTAssertTrue(app.buttons["開始"].waitForExistence(timeout: 10), "stop didn't stop")
         app.buttons["clear"].tap()
         let cleared = app.staticTexts["transcript"]
         XCTAssertTrue(!cleared.exists || cleared.label.trimmingCharacters(in: .whitespaces).isEmpty, "clear left text behind")
         shot(app, "cleared")
-    }
 
-    /// The network goes down for 3 s, 3 s into the clip: nothing shows it, and the transcript has every word exactly once
-    /// (the backlog is over 1.5 s, so this also walks the split into a catch-up and a live segment).
-    func testDropIsInvisible() throws {
-        let app = XCUIApplication()
-        app.launchEnvironment["CANTONESE_TEST_AUDIO"] = "1"
-        app.launchEnvironment["CANTONESE_TEST_DROP"] = "3"
-        app.launch()
-        app.buttons["clear"].tap()
+        // A second start reuses the loaded model: no download, listening at once.
         app.buttons["mic"].tap()
-        XCTAssertTrue(app.staticTexts["● 聽緊"].waitForExistence(timeout: 20), "never started listening (\(status(app)))")
-        var statuses: Set<String> = []
-        let deadline = Date().addingTimeInterval(14)   // the 7.5 s clip, the outage and the catch-up
-        while Date() < deadline {
-            statuses.insert(status(app))
-            XCTAssertEqual(app.buttons["mic"].label, "停止", "the drop stopped the session")
-            Thread.sleep(forTimeInterval: 0.2)
-        }
-        shot(app, "after-drop")
+        XCTAssertTrue(app.staticTexts["● 聽緊"].waitForExistence(timeout: 60), "second start was slow (\(status(app)))")
         app.buttons["mic"].tap()
-        Thread.sleep(forTimeInterval: 4)
-        shot(app, "stopped-after-drop")
-        let text = app.staticTexts["transcript"].label
-        print("TRANSCRIPT (drop): \(text) STATUSES: \(statuses)")
-        XCTAssertEqual(statuses, ["● 聽緊"], "the drop showed in the status")
-        XCTAssertEqual(text.components(separatedBy: "飲茶").count - 1, 1, "lost or repeated words: \(text)")
-        XCTAssertTrue(text.contains("聽日"), "lost the audio after the drop: \(text)")
     }
 
     private func status(_ app: XCUIApplication) -> String { app.staticTexts["status"].label }

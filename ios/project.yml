@@ -1,13 +1,17 @@
-# XcodeGen spec (CI runs `xcodegen generate`; the .xcodeproj is not committed). The relay host and the Access service
-# token come from Secrets.xcconfig, which CI writes from the repo's GitHub secrets (never committed).
+# XcodeGen spec (CI runs `xcodegen generate`; the .xcodeproj is not committed). The app transcribes on the phone
+# (Qwen3-ASR 1.7B on CoreML, downloaded from Hugging Face on first use), so it has no server and no secrets.
 name: Cantonese
 options:
   bundleIdPrefix: dev.de0ch
-  deploymentTarget: { iOS: "17.0" }
+  deploymentTarget: { iOS: "18.0" }
   createIntermediateGroups: true
-configFiles:
-  Debug: Secrets.xcconfig
-  Release: Secrets.xcconfig
+packages:
+  SpeechSwift:
+    url: https://github.com/soniqo/speech-swift
+    revision: cbad3be29480825707890490f446b19d7288be2d
+  SwiftyOpenCC:
+    url: https://github.com/ddddxxx/SwiftyOpenCC
+    revision: 1d8105a0f7199c90af722bff62728050c858e777
 settings:
   base:
     DEVELOPMENT_TEAM: S64YL394S3
@@ -24,6 +28,17 @@ targets:
       - path: App
       - path: ../testdata/cantonese-16k.wav
         buildPhase: resources
+    dependencies:
+      - package: SpeechSwift
+        product: Qwen3ASR
+      - package: SpeechSwift
+        product: SpeechVAD
+      - package: SwiftyOpenCC
+        product: OpenCC
+    entitlements:
+      path: App/Cantonese.entitlements
+      properties:
+        com.apple.developer.kernel.increased-memory-limit: true
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: dev.de0ch.cantonese
@@ -36,14 +51,11 @@ targets:
         CFBundleShortVersionString: "$(MARKETING_VERSION)"
         CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
         ITSAppUsesNonExemptEncryption: false
-        NSMicrophoneUsageDescription: 用咪收音，即時轉做廣東話字幕。
+        NSMicrophoneUsageDescription: 用咪收音，喺部手機度即時轉做廣東話字幕。
         UIBackgroundModes: [audio]
         UILaunchScreen: {}
         UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
         LSRequiresIPhoneOS: true
-        RelayHost: "$(RELAY_HOST)"
-        AccessClientId: "$(CF_ACCESS_CLIENT_ID)"
-        AccessClientSecret: "$(CF_ACCESS_CLIENT_SECRET)"
   CantoneseUITests:
     type: bundle.ui-testing
     platform: iOS
