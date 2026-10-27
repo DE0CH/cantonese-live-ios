@@ -1,7 +1,8 @@
 # Builds the iOS app on a GitHub macOS runner, walks every flow on an iPhone 17 simulator (the phone replica, streaming
-# the bundled Cantonese clip through the on-device model, which the app downloads from Hugging Face and the simulator
-# runs on its CPU), then archives UNSIGNED and lets the export cloud-sign with Apple's managed distribution certificate
-# (App Store Connect API key) and upload to TestFlight. The app has no server and no secrets.
+# the bundled Cantonese clip through VAD, segmenting, OpenCC and the UI; the simulator has no Metal for MLX, so a
+# stand-in answers for the model there, and mlx-check runs the real model on a Mac), then archives UNSIGNED and lets
+# the export cloud-sign with Apple's managed distribution certificate (App Store Connect API key) and upload to
+# TestFlight. The app has no server and no secrets.
 name: ios
 on:
   workflow_dispatch:
@@ -19,7 +20,7 @@ defaults:
 jobs:
   build:
     runs-on: macos-26
-    timeout-minutes: 120
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
       - name: Xcode, xcodegen
@@ -29,11 +30,12 @@ jobs:
           XCODE=$(ls -d /Applications/Xcode_*.app | grep -v -i beta | sort -V | tail -1)
           echo "Using $XCODE"; sudo xcode-select -s "$XCODE"; xcodebuild -version
           brew list xcodegen >/dev/null 2>&1 || brew install xcodegen
+          xcodebuild -downloadComponent MetalToolchain > /dev/null 2>&1 || true   # MLX's shaders
           sed -i '' "s/BUILD_NUMBER: \"1\"/BUILD_NUMBER: \"$BUILD_NUMBER\"/" project.yml
           xcodegen generate --quiet
       - name: Phone replica (iPhone 17 simulator, every flow, on-device model)
         id: replica
-        timeout-minutes: 75
+        timeout-minutes: 35
         run: |
           UDID=$(xcrun simctl list devices available -j | python3 -c "
           import json,sys,re

@@ -1,5 +1,5 @@
 # XcodeGen spec (CI runs `xcodegen generate`; the .xcodeproj is not committed). The app transcribes on the phone
-# (Qwen3-ASR 1.7B on CoreML, downloaded from Hugging Face on first use), so it has no server and no secrets.
+# (Qwen3-ASR 1.7B on the GPU through MLX, downloaded from Hugging Face on first use), so it has no server and no secrets.
 name: Cantonese
 options:
   bundleIdPrefix: dev.de0ch
@@ -52,7 +52,6 @@ targets:
         CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
         ITSAppUsesNonExemptEncryption: false
         NSMicrophoneUsageDescription: 用咪收音，喺部手機度即時轉做廣東話字幕。
-        UIBackgroundModes: [audio]
         UILaunchScreen: {}
         UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
         LSRequiresIPhoneOS: true

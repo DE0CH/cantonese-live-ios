@@ -1,13 +1,14 @@
 import AVFoundation
-import CoreML
 import Foundation
 import OpenCC
 import os
 import Qwen3ASR
 import SpeechVAD
+import UIKit
 
-/// Transcribes on the phone: Qwen3-ASR 1.7B converted to CoreML (DE0CH/Qwen3-ASR-1.7B-CoreML), run on the Neural
-/// Engine and CPU only, never the GPU, so it keeps going with the screen locked. Nothing leaves the phone.
+/// Transcribes on the phone: Qwen3-ASR 1.7B (5-bit, aufklarer/Qwen3-ASR-1.7B-MLX-5bit) on the GPU through MLX, via
+/// speech-swift. Nothing leaves the phone. iOS allows no GPU work in the background, so it works with the app on
+/// screen: the screen stays awake while listening, and leaving the app stops it.
 ///
 /// The mic's 16 kHz audio goes through Silero VAD (CoreML). Speech is cut into segments at pauses (or at 10 s); while a
 /// segment is still being spoken it is transcribed again every so often as pending text, and when it ends it is
@@ -28,7 +29,7 @@ final class Transcriber: ObservableObject {
         switch state { case .loading, .listening: return true; default: return false }
     }
 
-    static let modelRepo = "DE0CH/Qwen3-ASR-1.7B-CoreML"
+    static let modelId = "aufklarer/Qwen3-ASR-1.7B-MLX-5bit"
 
     private var engine: AVAudioEngine?
     private var sessionObservers: [NSObjectProtocol] = []
@@ -39,6 +40,14 @@ final class Transcriber: ObservableObject {
     /// UI tests stream the bundled clip instead of the microphone (the simulator has no real mic).
     private let testAudio = ProcessInfo.processInfo.environment["CANTONESE_TEST_AUDIO"] == "1"
 
+    init() {
+        // The GPU is off limits in the background: leaving the app (or locking the phone) stops listening.
+        NotificationCenter.default.addObserver(forName: UIApplication.didEnterBackgroundNotification, object: nil,
+                                               queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.stop() }
+        }
+    }
+
     func start() {
         guard !isRunning else { return }
         state = .loading("載入模型…")
@@ -47,7 +56,7 @@ final class Transcriber: ObservableObject {
                 let worker = try await Worker.shared(progress: { [weak self] p in
                     Task { @MainActor in
                         guard let self, case .loading = self.state else { return }
-                        self.state = .loading(p >= 1 ? "載入模型…" : "下載模型 \(Int(p * 100))%（第一次要下載，約 2.5 GB）")
+                        self.state = .loading(p >= 0.8 ? "載入模型…" : "下載模型 \(Int(p / 0.8 * 100))%（第一次要下載，約 2.3 GB）")
                     }
                 })
                 try Task.checkCancellation()
@@ -64,6 +73,7 @@ final class Transcriber: ObservableObject {
             }
             do {
                 if testAudio { streamTestFile() } else { try startMicrophone() }
+                UIApplication.shared.isIdleTimerDisabled = true   // the screen stays on while listening
                 state = .listening
             } catch {
                 fail("用唔到咪：\(error.localizedDescription)")
@@ -98,6 +108,7 @@ final class Transcriber: ObservableObject {
     }
 
     private func stopAudio() {
+        UIApplication.shared.isIdleTimerDisabled = false
         engine?.inputNode.removeTap(onBus: 0)
         engine?.stop()
         engine = nil
@@ -192,7 +203,7 @@ final class Worker: @unchecked Sendable {
     /// Segments shown on screen and the text that just finished.
     var onUpdate: (([Shown], String) -> Void)?
 
-    private let asr: CoreMLASRModel
+    private let asr: ([Float]) throws -> String
     private let vad: SileroVADModel
     private let convert: ChineseConverter
     private let audioQueue = DispatchQueue(label: "cantonese.audio")
@@ -233,14 +244,24 @@ final class Worker: @unchecked Sendable {
     static func shared(progress: @escaping (Double) -> Void) async throws -> Worker {
         if let w = cached { return w }
         let dir = try modelDirectory()
-        let asrDir = dir.appendingPathComponent("qwen3-asr-1.7b")
-        try await ModelFiles.ensure(repo: Transcriber.modelRepo, in: asrDir, progress: progress)
-        progress(1)
-        let asr = try await CoreMLASRModel.fromPretrained(
-            encoderModelId: Transcriber.modelRepo, decoderModelId: Transcriber.modelRepo,
-            tokenizerModelId: Transcriber.modelRepo,
-            encoderComputeUnits: .cpuAndNeuralEngine, decoderComputeUnits: .cpuAndNeuralEngine,
-            cacheDir: asrDir, offlineMode: true)
+        #if targetEnvironment(simulator)
+        // The simulator has no Metal for MLX, so the UI tests run everything but the model: this stand-in answers each
+        // segment of the bundled clip with what the model says for it (in its Simplified output, so OpenCC still runs).
+        // The real model is heard on a Mac by the mlx-check workflow.
+        let lines = ["我哋今日去咗饮茶，啲虾饺好好食。", "佢话听日会再嚟。"]
+        var said = 0
+        let asr: ([Float]) throws -> String = { _ in defer { said += 1 }; return lines[min(said, lines.count - 1)] }
+        #else
+        // speech-swift reports the download as 0–0.8 of its progress, then loading.
+        let model = try await Qwen3ASRModel.fromPretrained(
+            modelId: Transcriber.modelId, cacheDir: dir.appendingPathComponent("qwen3-asr-1.7b-5bit"),
+            progressHandler: { p, _ in progress(p) })
+        let asr: ([Float]) throws -> String = { audio in
+            var options = Qwen3DecodingOptions()
+            options.maxTokens = 200
+            return try model.transcribeThrowing(audio: audio, sampleRate: 16000, options: options)
+        }
+        #endif
         let vad = try await SileroVADModel.fromPretrained(engine: .coreml, cacheDir: dir.appendingPathComponent("silero-vad"))
         let convert = try ChineseConverter(options: [.traditionalize, .hkStandard])
         log.notice("models loaded")
@@ -260,7 +281,7 @@ final class Worker: @unchecked Sendable {
         return dir
     }
 
-    private init(asr: CoreMLASRModel, vad: SileroVADModel, convert: ChineseConverter) {
+    private init(asr: @escaping ([Float]) throws -> String, vad: SileroVADModel, convert: ChineseConverter) {
         self.asr = asr
         self.vad = vad
         self.convert = convert
@@ -358,7 +379,7 @@ final class Worker: @unchecked Sendable {
     private func transcribe(_ audio: [Float]) -> String {
         let t0 = Date()
         do {
-            let raw = try asr.transcribeWithoutMLX(audio: audio, sampleRate: 16000, language: nil, maxTokens: 200)
+            let raw = try asr(audio)
             Self.log.notice("transcribed \(audio.count / 16) ms of audio in \(Int(Date().timeIntervalSince(t0) * 1000)) ms: \(raw, privacy: .private)")
             return convert.convert(raw.trimmingCharacters(in: .whitespacesAndNewlines))
         } catch {

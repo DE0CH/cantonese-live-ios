@@ -1,8 +1,8 @@
 import XCTest
 
-/// The phone replica: walks every flow on the simulator, streaming the bundled Cantonese clip instead of the mic.
-/// The first start downloads the model from Hugging Face; the simulator runs it on the CPU (no Neural Engine), so the
-/// waits are long.
+/// The phone replica: walks every flow on the simulator, streaming the bundled Cantonese clip instead of the mic. The
+/// simulator can't run MLX, so a stand-in answers for the model (Transcriber.swift); VAD, segments, OpenCC and the UI
+/// are real.
 final class CantoneseUITests: XCTestCase {
     func testEveryFlow() throws {
         let app = XCUIApplication()
@@ -12,10 +12,8 @@ final class CantoneseUITests: XCTestCase {
 
         app.buttons["clear"].tap()
         app.buttons["mic"].tap()
-        var sawDownload = false
-        let ready = Date().addingTimeInterval(20 * 60)
+        let ready = Date().addingTimeInterval(3 * 60)
         while Date() < ready, status(app) != "● 聽緊" {
-            if status(app).hasPrefix("下載模型") && !sawDownload { sawDownload = true; shot(app, "downloading") }
             if status(app).hasPrefix("用唔到") { break }
             Thread.sleep(forTimeInterval: 1)
         }
@@ -24,7 +22,7 @@ final class CantoneseUITests: XCTestCase {
 
         // The 7.5 s clip and a second of silence end one segment; its transcription lands as a committed line.
         let transcript = app.staticTexts["transcript"]
-        let deadline = Date().addingTimeInterval(10 * 60)
+        let deadline = Date().addingTimeInterval(60)
         while Date() < deadline, !(transcript.exists && transcript.label.contains("我哋")) {
             Thread.sleep(forTimeInterval: 2)
         }
@@ -41,7 +39,7 @@ final class CantoneseUITests: XCTestCase {
         XCTAssertTrue(!cleared.exists || cleared.label.trimmingCharacters(in: .whitespaces).isEmpty, "clear left text behind")
         shot(app, "cleared")
 
-        // A second start reuses the loaded model: no download, listening at once.
+        // A second start reuses the loaded models: listening at once.
         app.buttons["mic"].tap()
         XCTAssertTrue(app.staticTexts["● 聽緊"].waitForExistence(timeout: 60), "second start was slow (\(status(app)))")
         app.buttons["mic"].tap()
