@@ -52,6 +52,7 @@ final class Transcriber: ObservableObject {
     private var active = false
     private var watchdog: Timer?
     private var engine: AVAudioEngine?
+    private var sessionObservers: [NSObjectProtocol] = []
     private var filePlayback: Task<Void, Never>?
     private let target = AVAudioFormat(commonFormat: .pcmFormatInt16, sampleRate: 16000, channels: 1, interleaved: true)!
     /// UI tests stream the bundled clip instead of the microphone (the simulator has no real mic).
@@ -220,6 +221,8 @@ final class Transcriber: ObservableObject {
         engine = nil
         filePlayback?.cancel()
         filePlayback = nil
+        for o in sessionObservers { NotificationCenter.default.removeObserver(o) }
+        sessionObservers = []
         try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
     }
 
@@ -282,9 +285,28 @@ final class Transcriber: ObservableObject {
     }
 
     private func startMicrophone() throws {
+        // Always the iPhone's own mic, mixed with whatever else plays: Bluetooth headphones stay on A2DP (output only,
+        // so they keep playing music in full quality and never become the mic); with no headphones other apps' audio
+        // goes to the speaker, not the earpiece. A call or another app taking the audio session stops transcription.
         let session = AVAudioSession.sharedInstance()
-        try session.setCategory(.record, mode: .measurement)
+        try session.setCategory(.playAndRecord, mode: .measurement,
+                                options: [.mixWithOthers, .allowBluetoothA2DP, .defaultToSpeaker])
         try session.setActive(true)
+        pinBuiltInMic()
+        let center = NotificationCenter.default
+        sessionObservers = [
+            center.addObserver(forName: AVAudioSession.routeChangeNotification, object: session, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.pinBuiltInMic() }
+            },
+            center.addObserver(forName: AVAudioSession.interruptionNotification, object: session, queue: .main) { [weak self] note in
+                let type = (note.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt).flatMap(AVAudioSession.InterruptionType.init)
+                guard type == .began else { return }
+                MainActor.assumeIsolated { self?.stop() }
+            },
+            center.addObserver(forName: AVAudioSession.mediaServicesWereResetNotification, object: session, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.stop() }
+            },
+        ]
         let engine = AVAudioEngine()
         let input = engine.inputNode
         let format = input.outputFormat(forBus: 0)
@@ -305,6 +327,13 @@ final class Transcriber: ObservableObject {
         engine.prepare()
         try engine.start()
         self.engine = engine
+    }
+
+    private func pinBuiltInMic() {
+        let session = AVAudioSession.sharedInstance()
+        guard session.currentRoute.inputs.first?.portType != .builtInMic,
+              let mic = session.availableInputs?.first(where: { $0.portType == .builtInMic }) else { return }
+        try? session.setPreferredInput(mic)
     }
 
     private func streamTestFile() {
