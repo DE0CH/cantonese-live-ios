@@ -1,3 +1,4 @@
+import AudioCommon
 import AVFoundation
 import Foundation
 import OpenCC
@@ -6,9 +7,9 @@ import Qwen3ASR
 import SpeechVAD
 import UIKit
 
-/// Transcribes on the phone: Qwen3-ASR 1.7B (5-bit, aufklarer/Qwen3-ASR-1.7B-MLX-5bit) on the GPU through MLX, via
-/// speech-swift. Nothing leaves the phone. iOS allows no GPU work in the background, so it works with the app on
-/// screen: the screen stays awake while listening, and leaving the app stops it.
+/// Transcribes on the phone: Qwen3-ASR 0.6B (int8 CoreML, aufklarer/Qwen3-ASR-CoreML) on the Neural Engine and CPU,
+/// never the GPU, through speech-swift's MLX-free CoreML path, so it also keeps going with the screen locked. Nothing
+/// leaves the phone. The screen stays awake while listening.
 ///
 /// The mic's 16 kHz audio goes through Silero VAD (CoreML). Speech is cut into segments at pauses (or at 10 s); while a
 /// segment is still being spoken it is transcribed again every so often as pending text, and when it ends it is
@@ -29,7 +30,7 @@ final class Transcriber: ObservableObject {
         switch state { case .loading, .listening: return true; default: return false }
     }
 
-    static let modelId = "aufklarer/Qwen3-ASR-1.7B-MLX-5bit"
+
 
     private var engine: AVAudioEngine?
     private var sessionObservers: [NSObjectProtocol] = []
@@ -40,14 +41,6 @@ final class Transcriber: ObservableObject {
     /// UI tests stream the bundled clip instead of the microphone (the simulator has no real mic).
     private let testAudio = ProcessInfo.processInfo.environment["CANTONESE_TEST_AUDIO"] == "1"
 
-    init() {
-        // The GPU is off limits in the background: leaving the app (or locking the phone) stops listening.
-        NotificationCenter.default.addObserver(forName: UIApplication.didEnterBackgroundNotification, object: nil,
-                                               queue: .main) { [weak self] _ in
-            MainActor.assumeIsolated { self?.stop() }
-        }
-    }
-
     func start() {
         guard !isRunning else { return }
         state = .loading("載入模型…")
@@ -56,7 +49,7 @@ final class Transcriber: ObservableObject {
                 let worker = try await Worker.shared(progress: { [weak self] p in
                     Task { @MainActor in
                         guard let self, case .loading = self.state else { return }
-                        self.state = .loading(p >= 0.8 ? "載入模型…" : "下載模型 \(Int(p / 0.8 * 100))%（第一次要下載，約 2.3 GB）")
+                        self.state = .loading(p >= 0.8 ? "載入模型…" : "下載模型 \(Int(p / 0.8 * 100))%（第一次要下載，約 950 MB）")
                     }
                 })
                 try Task.checkCancellation()
@@ -245,21 +238,31 @@ final class Worker: @unchecked Sendable {
         if let w = cached { return w }
         let dir = try modelDirectory()
         #if targetEnvironment(simulator)
-        // The simulator has no Metal for MLX, so the UI tests run everything but the model: this stand-in answers each
-        // segment of the bundled clip with what the model says for it (in its Simplified output, so OpenCC still runs).
-        // The real model is heard on a Mac by the mlx-check workflow.
+        // On the simulator CoreML runs the model on the CPU at minutes per line, so the UI tests run everything but the
+        // model: this stand-in answers each segment of the bundled clip with what the model says for it (in its
+        // Simplified output, so OpenCC still runs).
+        // The real model is heard on a Mac by the model-check workflow.
         let lines = ["我哋今日去咗饮茶，啲虾饺好好食。", "佢话听日会再嚟。"]
         var said = 0
         let asr: ([Float]) throws -> String = { _ in defer { said += 1 }; return lines[min(said, lines.count - 1)] }
         #else
-        // speech-swift reports the download as 0–0.8 of its progress, then loading.
-        let model = try await Qwen3ASRModel.fromPretrained(
-            modelId: Transcriber.modelId, cacheDir: dir.appendingPathComponent("qwen3-asr-1.7b-5bit"),
-            progressHandler: { p, _ in progress(p) })
+        // Neural Engine and CPU only: no GPU, so it runs with the screen locked too. The parts are loaded one by one
+        // because CoreMLASRModel.fromPretrained takes its tokenizer from an MLX repo and downloads its 708 MB of
+        // weights along with it; the tokenizer here is just the official vocab.
+        let asrDir = dir.appendingPathComponent("qwen3-asr-0.6b-coreml")
+        let encoder = try await CoreMLASREncoder.fromPretrained(
+            computeUnits: .cpuAndNeuralEngine, cacheDir: asrDir, progressHandler: { p, _ in progress(0.3 * p) })
+        let decoder = try await CoreMLTextDecoder.fromPretrained(
+            computeUnits: .cpuAndNeuralEngine, cacheDir: asrDir, progressHandler: { p, _ in progress(0.3 + 0.45 * p) })
+        let tokenizer = try await loadTokenizer(into: dir.appendingPathComponent("qwen3-asr-tokenizer"))
+        progress(0.8)
+        let model = CoreMLASRModel(encoder: encoder, decoder: decoder)
         let asr: ([Float]) throws -> String = { audio in
-            var options = Qwen3DecodingOptions()
-            options.maxTokens = 200
-            return try model.transcribeThrowing(audio: audio, sampleRate: 16000, options: options)
+            // With no tokenizer of its own the model answers with token ids ("151704 105043 …").
+            let ids = try model.transcribeWithoutMLX(audio: audio, sampleRate: 16000, language: nil, maxTokens: 200)
+                .split(separator: " ").compactMap { Int($0) }
+            let text = tokenizer.decode(tokens: ids)
+            return text.range(of: "<asr_text>").map { String(text[$0.upperBound...]) } ?? text
         }
         #endif
         let vad = try await SileroVADModel.fromPretrained(engine: .coreml, cacheDir: dir.appendingPathComponent("silero-vad"))
@@ -268,6 +271,22 @@ final class Worker: @unchecked Sendable {
         let w = Worker(asr: asr, vad: vad, convert: convert)
         cached = w
         return w
+    }
+
+    /// The Qwen3-ASR vocab (the decoder only needs ids → text), from the official model repo.
+    private static func loadTokenizer(into dir: URL) async throws -> Qwen3Tokenizer {
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        for name in ["vocab.json", "tokenizer_config.json"] {
+            let file = dir.appendingPathComponent(name)
+            guard !FileManager.default.fileExists(atPath: file.path) else { continue }
+            let url = URL(string: "https://huggingface.co/Qwen/Qwen3-ASR-0.6B/resolve/main/\(name)")!
+            let (tmp, response) = try await URLSession.shared.download(from: url)
+            guard (response as? HTTPURLResponse)?.statusCode == 200 else { throw URLError(.badServerResponse) }
+            try FileManager.default.moveItem(at: tmp, to: file)
+        }
+        let tokenizer = Qwen3Tokenizer()
+        try tokenizer.load(from: dir.appendingPathComponent("vocab.json"))
+        return tokenizer
     }
 
     /// Application Support/models, kept out of iCloud backups (the models download again).

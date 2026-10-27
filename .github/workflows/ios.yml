@@ -1,6 +1,6 @@
 # Builds the iOS app on a GitHub macOS runner, walks every flow on an iPhone 17 simulator (the phone replica, streaming
-# the bundled Cantonese clip through VAD, segmenting, OpenCC and the UI; the simulator has no Metal for MLX, so a
-# stand-in answers for the model there, and mlx-check runs the real model on a Mac), then archives UNSIGNED and lets
+# the bundled Cantonese clip through VAD, segmenting, OpenCC and the UI; a stand-in answers for the model there, which
+# on the simulator's CPU takes minutes per line, and model-check runs the real model on a Mac), then archives UNSIGNED and lets
 # the export cloud-sign with Apple's managed distribution certificate (App Store Connect API key) and upload to
 # TestFlight. The app has no server and no secrets.
 name: ios
