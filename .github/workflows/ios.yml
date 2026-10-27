@@ -46,7 +46,7 @@ jobs:
           [ -n "$UDID" ] || { echo "no iPhone 17 simulator"; exit 1; }
           xcrun simctl boot "$UDID" 2>/dev/null || true
           xcodebuild test -project Cantonese.xcodeproj -scheme Cantonese -configuration Release -destination "id=$UDID" \
-            -resultBundlePath "$RUNNER_TEMP/ui.xcresult" CODE_SIGN_IDENTITY=- CODE_SIGNING_REQUIRED=NO > "$RUNNER_TEMP/test.log" 2>&1 || true
+            -resultBundlePath "$RUNNER_TEMP/ui.xcresult" -skipPackagePluginValidation -skipMacroValidation CODE_SIGN_IDENTITY=- CODE_SIGNING_REQUIRED=NO > "$RUNNER_TEMP/test.log" 2>&1 || true
           grep -E "error:|\*\* TEST|Test Case .*(passed|failed)|TRANSCRIPT|XCTAssert" "$RUNNER_TEMP/test.log" | head -40 || true
           grep -A12 -E "The following build commands failed|Testing failed:" "$RUNNER_TEMP/test.log" | head -60 || true
           mkdir -p "$RUNNER_TEMP/screens"
@@ -76,7 +76,7 @@ jobs:
         if: github.event_name != 'workflow_dispatch' || inputs.upload
         run: |
           xcodebuild archive -project Cantonese.xcodeproj -scheme Cantonese -configuration Release -destination 'generic/platform=iOS' \
-            -archivePath "$RUNNER_TEMP/app.xcarchive" CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" > "$RUNNER_TEMP/archive.log" 2>&1 || true
+            -archivePath "$RUNNER_TEMP/app.xcarchive" -skipPackagePluginValidation -skipMacroValidation CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" > "$RUNNER_TEMP/archive.log" 2>&1 || true
           grep -E "error:|\*\* ARCHIVE" "$RUNNER_TEMP/archive.log" | head -40 || true
           grep -q "ARCHIVE SUCCEEDED" "$RUNNER_TEMP/archive.log"
       - name: Export, cloud-sign and upload to TestFlight
