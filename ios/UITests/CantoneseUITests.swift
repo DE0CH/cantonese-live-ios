@@ -7,6 +7,7 @@ final class CantoneseUITests: XCTestCase {
     func testEveryFlow() throws {
         let app = XCUIApplication()
         app.launchEnvironment["CANTONESE_TEST_AUDIO"] = "1"
+        app.launchArguments = ["-welcomed", "NO"]   // a first start, whatever ran before
         app.launch()
 
         // First start: the welcome sheet, once.
@@ -65,10 +66,46 @@ final class CantoneseUITests: XCTestCase {
 
         // The welcome sheet doesn't come back.
         app.terminate()
+        app.launchArguments = []
         app.launch()
         XCTAssertTrue(app.buttons["mic"].waitForExistence(timeout: 10))
         XCTAssertFalse(app.buttons["continue"].exists, "welcome sheet shown again")
     }
+
+    /// The App Store demo: a first start, then the demo conversation (testdata/demo) captioned live. The appstore workflow
+    /// records the simulator's screen during it for the App Preview and takes the store screenshots from its shots; it
+    /// cuts the recording at the "DEMO" lines this prints.
+    func testDemo() throws {
+        let app = XCUIApplication()
+        app.launchEnvironment["CANTONESE_TEST_AUDIO"] = "demo"
+        app.launchArguments = ["-welcomed", "NO"]
+        app.launch()
+        let go = app.buttons["continue"]
+        XCTAssertTrue(go.waitForExistence(timeout: 10), "no welcome sheet")
+        mark("welcome")
+        Thread.sleep(forTimeInterval: 3)
+        shot(app, "demo-welcome")
+        go.tap()
+        Thread.sleep(forTimeInterval: 1)
+        app.buttons["mic"].tap()
+        let ready = Date().addingTimeInterval(120)
+        while Date() < ready, status(app) != "聽緊" { Thread.sleep(forTimeInterval: 0.2) }
+        XCTAssertEqual(status(app), "聽緊")
+        mark("listening")
+        // The conversation is 19.2 s, then a second of silence; the last line is finished soon after.
+        Thread.sleep(forTimeInterval: 11)
+        shot(app, "demo-middle")
+        Thread.sleep(forTimeInterval: 11)
+        shot(app, "demo-captions")
+        mark("end")
+        Thread.sleep(forTimeInterval: 3)
+        let text = app.staticTexts["transcript"].label
+        print("DEMO TRANSCRIPT: \(text)")
+        XCTAssertTrue(text.contains("Central") && text.contains("MTR"), "demo captions missing: \(text)")
+        app.buttons["mic"].tap()
+    }
+
+    private func mark(_ what: String) { print("DEMO \(what) \(Date().timeIntervalSince1970)") }
 
     private func status(_ app: XCUIApplication) -> String { app.staticTexts["status"].label }
 

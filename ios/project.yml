@@ -32,6 +32,12 @@ targets:
         buildPhase: resources
       - path: ../testdata/cantonese-16k.wav
         buildPhase: resources
+      - path: ../testdata/cantonese-16k.json
+        buildPhase: resources
+      - path: ../testdata/demo/demo-16k.wav
+        buildPhase: resources
+      - path: ../testdata/demo/demo-16k.json
+        buildPhase: resources
       - path: Model
         type: folder
         buildPhase: resources

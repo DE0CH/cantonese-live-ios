@@ -32,8 +32,9 @@ final class Transcriber: ObservableObject {
     private var loadTask: Task<Void, Never>?
     private var worker: Worker?
     private let target = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 16000, channels: 1, interleaved: false)!
-    /// UI tests stream the bundled clip instead of the microphone (the simulator has no real mic).
-    private let testAudio = ProcessInfo.processInfo.environment["CANTONESE_TEST_AUDIO"] == "1"
+    /// UI tests stream a bundled clip instead of the microphone (the simulator has no real mic).
+    private let testClip = TestClip.current
+    private var testAudio: Bool { testClip != nil }
 
     init() {
         // The GPU is off limits in the background: leaving the app (or locking the phone) stops listening.
@@ -159,12 +160,9 @@ final class Transcriber: ObservableObject {
     }
 
     private func streamTestFile() {
-        guard let url = Bundle.main.url(forResource: "cantonese-16k", withExtension: "wav"),
-              let wav = try? Data(contentsOf: url) else { fail("搵唔到測試錄音"); return }
-        let samples = wav.dropFirst(44).withUnsafeBytes { raw in
-            raw.bindMemory(to: Int16.self).map { Float($0) / 32768 }
-        }
+        guard let samples = testClip?.samples else { fail("搵唔到測試錄音"); return }
         let worker = self.worker
+        Worker.log.notice("test audio starts")
         filePlayback = Task {
             var offset = 0
             while offset < samples.count, !Task.isCancelled {
@@ -173,12 +171,44 @@ final class Transcriber: ObservableObject {
                 offset = end
                 try? await Task.sleep(nanoseconds: 100_000_000)
             }
-            // A second of silence so the last words end their segment like a pause would.
+            // A second of silence so the last words end their line like a pause would.
             for _ in 0..<10 where !Task.isCancelled {
                 worker?.feed([Float](repeating: 0, count: 1600))
                 try? await Task.sleep(nanoseconds: 100_000_000)
             }
         }
+    }
+}
+
+/// A bundled 16 kHz mono clip the UI tests stream instead of the microphone, with what the real model says for each of
+/// its lines (testdata/*.json, taken from the model-check workflow) for the simulator's stand-in.
+struct TestClip {
+    struct Line: Decodable { let start: Double; let end: Double; let text: String }
+    let samples: [Float]
+    let lines: [Line]
+
+    /// CANTONESE_TEST_AUDIO: "1" streams the short test clip, "demo" the App Store demo conversation.
+    static let current: TestClip? = ProcessInfo.processInfo.environment["CANTONESE_TEST_AUDIO"]
+        .flatMap { load($0 == "demo" ? "demo-16k" : "cantonese-16k") }
+
+    private static func load(_ name: String) -> TestClip? {
+        guard let wav = Bundle.main.url(forResource: name, withExtension: "wav").flatMap({ try? Data(contentsOf: $0) }),
+              let json = Bundle.main.url(forResource: name, withExtension: "json").flatMap({ try? Data(contentsOf: $0) }),
+              let lines = try? JSONDecoder().decode([Line].self, from: json) else { return nil }
+        // 16-bit PCM from the "data" chunk: WAV headers are not always 44 bytes.
+        var i = 12
+        while i + 8 <= wav.count {
+            let size = (0..<4).reduce(0) { $0 | Int(wav[i + 4 + $1]) << (8 * $1) }
+            if wav[i..<(i + 4)] == Data("data".utf8) {
+                let pcm = wav[(i + 8)..<min(wav.count, i + 8 + size)]
+                let samples = pcm.withUnsafeBytes { raw in
+                    (0..<(raw.count / 2)).map { Float(Int16(littleEndian: raw.loadUnaligned(fromByteOffset: $0 * 2, as: Int16.self))) / 32768 }
+                }
+                return TestClip(samples: samples, lines: lines)
+            }
+            i += 8 + size + (size & 1)
+        }
+        return nil
     }
 }
 
@@ -223,21 +253,19 @@ final class Worker: @unchecked Sendable {
         }
         #if targetEnvironment(simulator)
         // The simulator has no Metal for MLX, so the UI tests run everything but the model: this stand-in finds where the
-        // audio sits in the bundled clip and answers with the clauses of what the model says for it (in its Simplified
-        // output, so OpenCC still runs) whose middle falls inside it. The real model is heard on a Mac by model-check.
+        // audio sits in the bundled clip and answers with what the real model says for the clip's lines whose middle falls
+        // inside it (TestClip; the model-check workflow hears the real model on a Mac).
         _ = dir
-        let clip = Bundle.main.url(forResource: "cantonese-16k", withExtension: "wav").flatMap { try? Data(contentsOf: $0) }
-            .map { $0.dropFirst(44).withUnsafeBytes { raw in raw.bindMemory(to: Int16.self).map { Float($0) / 32768 } } } ?? []
-        let clauses: [(text: String, middle: Double)] = [("我哋今日去咗饮茶，", 0.28), ("啲虾饺好好食。", 0.78)]
         let asr: ([Float]) throws -> String = { audio in
+            guard let clip = TestClip.current else { return "" }
             // Match 10 ms from the first sound in the audio (the silence after the clip matches nothing: no words).
             guard let k = audio.firstIndex(where: { $0 != 0 }), k + 160 <= audio.count else { return "" }
             let probe = audio[k..<(k + 160)]
-            guard let at = (0...max(0, clip.count - 160)).first(where: { o in
-                zip(clip[o..<(o + 160)], probe).allSatisfy { $0 == $1 }
+            guard let at = (0...max(0, clip.samples.count - 160)).first(where: { o in
+                zip(clip.samples[o..<(o + 160)], probe).allSatisfy { $0 == $1 }
             }) else { return "" }
-            let from = Double(at - k) / Double(clip.count), to = Double(at - k + audio.count) / Double(clip.count)
-            return clauses.filter { $0.middle >= from && $0.middle < to }.map(\.text).joined()
+            let from = Double(at - k) / 16000, to = Double(at - k + audio.count) / 16000
+            return clip.lines.filter { ($0.start + $0.end) / 2 >= from && ($0.start + $0.end) / 2 < to }.map(\.text).joined()
         }
         #else
         let model = try await Qwen3ASRModel.fromPretrained(
