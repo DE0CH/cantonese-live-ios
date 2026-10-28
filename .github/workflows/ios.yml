@@ -15,7 +15,6 @@ on:
       upload: { type: boolean, default: false }
       device: { type: string, default: "iPhone 17" }
       appearance: { type: string, default: light }
-      record: { type: boolean, default: false }   # record the screen during the tests (the App Preview)
   push:
     branches: [main]
     paths: ["ios/**", "testdata/**", ".github/workflows/ios.yml"]
@@ -67,7 +66,6 @@ jobs:
         env:
           DEVICE: ${{ inputs.device || 'iPhone 17' }}
           APPEARANCE: ${{ inputs.appearance || 'light' }}
-          RECORD: ${{ inputs.record || false }}
         run: |
           UDID=$(xcrun simctl list devices available -j | python3 -c "
           import json,sys,re
@@ -93,16 +91,8 @@ jobs:
             CODE_SIGN_IDENTITY=- CODE_SIGNING_REQUIRED=NO)
           xcodebuild build-for-testing "${COMMON[@]}" > "$RUNNER_TEMP/build.log" 2>&1 || true
           grep -E "error:|\*\* TEST BUILD" "$RUNNER_TEMP/build.log" | head -20 || true
-          # The App Preview: the simulator's screen while the tests run, and when it started (the demo test prints its
-          # moments as "DEMO <what> <unix time>").
-          if [ "$RECORD" = true ]; then
-            xcrun simctl io "$UDID" recordVideo --codec=h264 --force "$RUNNER_TEMP/screens/demo.mov" 2> "$RUNNER_TEMP/rec.err" & REC=$!
-            for i in $(seq 100); do grep -q "Recording started" "$RUNNER_TEMP/rec.err" && break; sleep 0.1; done
-            python3 -c "import time; print('RECORDING', time.time())" > "$RUNNER_TEMP/screens/demo-marks.txt"
-          fi
           xcodebuild test-without-building "${COMMON[@]}" -resultBundlePath "$RUNNER_TEMP/ui.xcresult" \
             -test-timeouts-enabled YES -maximum-test-execution-time-allowance 900 > "$RUNNER_TEMP/test.log" 2>&1 || true
-          if [ -n "${REC:-}" ]; then kill -INT $REC; wait $REC || true; grep "^DEMO " "$RUNNER_TEMP/test.log" >> "$RUNNER_TEMP/screens/demo-marks.txt" || true; cat "$RUNNER_TEMP/screens/demo-marks.txt"; fi
           kill $WATCHDOG 2>/dev/null || true
           tail -25 "$RUNNER_TEMP/test.log"
           grep -E "error:|\*\* TEST|Test Case .*(passed|failed)|TRANSCRIPT|XCTAssert" "$RUNNER_TEMP/test.log" | head -40 || true
@@ -135,8 +125,6 @@ jobs:
           name: replica-screens-${{ inputs.appearance || 'light' }}
           path: |
             ${{ runner.temp }}/screens/*.png
-            ${{ runner.temp }}/screens/demo.mov
-            ${{ runner.temp }}/screens/demo-marks.txt
             ${{ runner.temp }}/test.log
           if-no-files-found: ignore
       - name: Archive (unsigned)

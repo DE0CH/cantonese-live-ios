@@ -1,22 +1,14 @@
-//! The App Store art, made from the phone replica's output in CI (the appstore workflow):
+//! The App Store screenshots, made from the phone replica's demo test in CI (the appstore workflow):
 //!
-//! storeart stills  --light DIR --dark DIR --fonts DIR --out ios/fastlane/screenshots
-//!     Screenshots (1320 x 2868 RGB) per locale: light grey, a black bold headline and a grey line on top, the
-//!     simulator's screenshot in a black rounded iPhone-like frame with a soft shadow below.
-//! storeart preview --recording demo.mov --marks demo-marks.txt --audio demo-16k.wav --fonts DIR --out ios/fastlane/previews
-//!     The App Preview (886 x 1920, 30 fps, H.264, stereo AAC) per locale: the simulator's screen recording of the demo
-//!     test, cut by its marks, on the same grey with a headline band that changes as the demo goes on, and the demo
-//!     conversation's audio from the moment the app starts listening. ffmpeg does the video.
-//!
-//! The demo test prints "DEMO welcome|listening|end <unix time>"; the replica writes "RECORDING <unix time>" when the
-//! screen recording starts.
+//! storeart stills --light DIR --dark DIR --fonts DIR --out ios/fastlane/screenshots
+//!     1320 x 2868 RGB per locale: light grey, a black bold headline and a grey line on top, the simulator's screenshot
+//!     in a black rounded iPhone-like frame with a soft shadow below.
 
 use ab_glyph::{FontVec, PxScale};
 use image::{imageops, Rgb, RgbImage, Rgba, RgbaImage};
 use imageproc::drawing::{draw_text_mut, text_size};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 const BG: [u8; 3] = [242, 242, 247]; // iOS systemGroupedBackground
 const HEAD: [u8; 3] = [0, 0, 0];
@@ -220,19 +212,19 @@ fn flatten(img: &RgbaImage) -> RgbImage {
 }
 
 /// The grey canvas with the headline band; returns it and the y where the band ends.
-fn band(fonts: &Fonts, w: u32, h: u32, c: &Copy, scale: f32) -> (RgbaImage, i32) {
+fn band(fonts: &Fonts, w: u32, h: u32, c: &Copy) -> (RgbaImage, i32) {
     let mut img = RgbaImage::from_pixel(w, h, Rgba([BG[0], BG[1], BG[2], 255]));
-    let width = w - (110.0 * scale) as u32;
+    let width = w - 110;
     // Latin headlines a little smaller than Chinese ones, which are 10 full-width characters at most.
     let head = if c.head.is_ascii() { 100.0 } else { 118.0 };
-    let y = draw_block(&mut img, &fonts.bold, head * scale, c.head, (230.0 * scale) as i32, width, HEAD);
-    let y = draw_block(&mut img, &fonts.regular, 58.0 * scale, c.sub, y + (36.0 * scale) as i32, width, SUB);
+    let y = draw_block(&mut img, &fonts.bold, head, c.head, 230, width, HEAD);
+    let y = draw_block(&mut img, &fonts.regular, 58.0, c.sub, y + 36, width, SUB);
     (img, y)
 }
 
 fn still(fonts: &Fonts, c: &Copy, shot: &RgbImage) -> RgbImage {
     let (w, h) = (1320, 2868);
-    let (mut img, text_end) = band(fonts, w, h, c, 1.0);
+    let (mut img, text_end) = band(fonts, w, h, c);
     // The phone is 1060 px wide (as in the approved mockup) unless the text needs more room; its bottom stays 52 px
     // above the edge.
     let top = (text_end + 110).max(600);
@@ -286,120 +278,6 @@ fn stills(args: &HashMap<String, String>) {
     }
 }
 
-/// Marks: RECORDING and DEMO welcome/listening/end, as unix times.
-fn marks(path: &Path) -> HashMap<String, f64> {
-    let text = std::fs::read_to_string(path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
-    let mut m = HashMap::new();
-    for l in text.lines() {
-        let f: Vec<&str> = l.split_whitespace().collect();
-        match f.as_slice() {
-            ["RECORDING", t] => {
-                m.insert("recording".into(), t.parse().unwrap());
-            }
-            ["DEMO", what, t] => {
-                if let Ok(t) = t.parse() {
-                    m.insert(what.to_string(), t);
-                }
-            }
-            _ => {}
-        }
-    }
-    for k in ["recording", "welcome", "listening"] {
-        assert!(m.contains_key(k), "no {k} mark in {}", path.display());
-    }
-    m
-}
-
-fn ffmpeg(args: &[String]) {
-    eprintln!("ffmpeg {}", args.join(" "));
-    let ok = Command::new("ffmpeg").args(["-hide_banner", "-loglevel", "error", "-y"]).args(args).status().expect("ffmpeg");
-    assert!(ok.success(), "ffmpeg failed");
-}
-
-fn preview(args: &HashMap<String, String>) {
-    let fonts = load_fonts(Path::new(&args["fonts"]));
-    let m = marks(Path::new(&args["marks"]));
-    let (rec, welcome, listening) = (m["recording"], m["welcome"], m["listening"]);
-    // The demo: the welcome sheet (half a second after it is up), the tap, then the 19.2 s conversation and its last
-    // line being finished. 15–30 s in all (Apple's limits), kept under 29.5.
-    let end = listening + 21.5;
-    let start = (welcome - 0.5).max(end - 29.5);
-    let dur = end - start;
-    assert!(dur >= 15.0, "preview only {dur:.2} s");
-    let at = start - rec; // into the recording
-    assert!(at >= 0.0, "the recording started {:.2} s after the welcome sheet", -at);
-    // The conversation's audio starts when streaming does (≈ the listening mark; the test sees 聽緊 within 0.2 s).
-    let lead: f64 = args.get("lead").map(|s| s.parse().unwrap()).unwrap_or(0.2);
-    let audio_at = (listening - start - lead).max(0.0);
-    // Headline band: on the phone while the welcome sheet shows, captions once it listens, the three languages once
-    // the second line (Central, proposal) is up.
-    let cuts = [0.0, listening - start, listening - start + 7.5, dur];
-    eprintln!("recording +{at:.2} s, {dur:.2} s long, audio at {audio_at:.2} s, cuts {cuts:?}");
-
-    let (w, h) = (886u32, 1920u32);
-    let scale = w as f32 / 1320.0;
-    let tmp = std::env::temp_dir().join(format!("storeart-{}", std::process::id()));
-    std::fs::create_dir_all(&tmp).unwrap();
-    for locale in LOCALES {
-        let c = copy(locale);
-        let order = [&c[2], &c[0], &c[1]];
-        let bands: Vec<(RgbaImage, i32)> = order.iter().map(|c| band(&fonts, w, h, c, scale)).collect();
-        // The recording, scaled to fit under the tallest band, with rounded corners and a soft shadow (no device
-        // frame: Apple doesn't allow one in previews).
-        let top = bands.iter().map(|b| b.1).max().unwrap() + 60;
-        let vh = ((h as i32 - 56 - top) / 2 * 2) as u32;
-        let vw = ((vh as f32 * 1320.0 / 2868.0 / 2.0).round() * 2.0) as u32;
-        let vx = ((w - vw) / 2) as i32;
-        let r = vw as f32 * 0.12;
-        let mut layers = vec![];
-        for (i, (img, _)) in bands.into_iter().enumerate() {
-            let mut img = img;
-            shadow(&mut img, vx, top, vw, vh, r, 28.0, 20, 0.24);
-            let p = tmp.join(format!("{locale}-band{i}.png"));
-            flatten(&img).save(&p).unwrap();
-            layers.push((p, img));
-        }
-        // The corners over the video: the background where the rounded rectangle doesn't cover.
-        let bg = &layers[0].1;
-        let corners = RgbaImage::from_fn(vw, vh, |x, y| {
-            let a = 1.0 - rounded_cov(x as f32, y as f32, vw as f32, vh as f32, r);
-            let p = bg.get_pixel(vx as u32 + x, top as u32 + y).0;
-            Rgba([p[0], p[1], p[2], (a * 255.0).round() as u8])
-        });
-        let corners_p = tmp.join(format!("{locale}-corners.png"));
-        corners.save(&corners_p).unwrap();
-
-        let dir = Path::new(&args["out"]).join(locale);
-        std::fs::create_dir_all(&dir).unwrap();
-        let out = dir.join("1-demo-APP_IPHONE_67.mp4");
-        let mut a: Vec<String> = vec!["-ss".into(), format!("{at:.3}"), "-t".into(), format!("{dur:.3}"), "-i".into(), args["recording"].clone()];
-        for (i, (p, _)) in layers.iter().enumerate() {
-            let d = cuts[i + 1] - cuts[i];
-            a.extend(["-loop", "1", "-framerate", "30", "-t", &format!("{d:.3}"), "-i"].map(String::from));
-            a.push(p.display().to_string());
-        }
-        a.extend(["-loop", "1", "-framerate", "30", "-i"].map(String::from));
-        a.push(corners_p.display().to_string());
-        a.extend(["-i".to_string(), args["audio"].clone()]);
-        let ms = (audio_at * 1000.0).round() as i64;
-        let filter = format!(
-            "[1:v][2:v][3:v]concat=n=3:v=1:a=0,fps=30,format=rgb24[bg];\
-             [0:v]setpts=PTS-STARTPTS,fps=30,scale={vw}:{vh}:flags=lanczos[rec];\
-             [bg][rec]overlay={vx}:{top}:eof_action=repeat[v1];\
-             [v1][4:v]overlay={vx}:{top}:shortest=1,trim=duration={dur:.3},format=yuv420p[v];\
-             [5:a]aformat=channel_layouts=stereo,aresample=44100,adelay={ms}:all=1,apad,atrim=duration={dur:.3}[a]"
-        );
-        a.extend(["-filter_complex", &filter, "-map", "[v]", "-map", "[a]",
-            "-c:v", "libx264", "-profile:v", "high", "-level", "4.0", "-preset", "slow", "-b:v", "10M", "-maxrate", "12M",
-            "-bufsize", "20M", "-r", "30", "-pix_fmt", "yuv420p",
-            "-c:a", "aac", "-b:a", "256k", "-ar", "44100", "-ac", "2", "-movflags", "+faststart"].map(String::from));
-        a.push(out.display().to_string());
-        ffmpeg(&a);
-        println!("{}", out.display());
-    }
-    std::fs::remove_dir_all(&tmp).ok();
-}
-
 fn main() {
     let argv: Vec<String> = std::env::args().skip(1).collect();
     let cmd = argv.first().cloned().unwrap_or_default();
@@ -419,12 +297,8 @@ fn main() {
             need(&["light", "dark", "fonts", "out"]);
             stills(&args)
         }
-        "preview" => {
-            need(&["recording", "marks", "audio", "fonts", "out"]);
-            preview(&args)
-        }
         _ => {
-            eprintln!("usage: storeart stills --light DIR --dark DIR --fonts DIR --out DIR\n       storeart preview --recording MOV --marks TXT --audio WAV --fonts DIR --out DIR [--lead S]");
+            eprintln!("usage: storeart stills --light DIR --dark DIR --fonts DIR --out DIR");
             std::process::exit(2);
         }
     }

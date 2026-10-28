@@ -1,8 +1,7 @@
-# Loads the App Store listing into App Store Connect from fastlane/metadata, fastlane/screenshots and fastlane/previews
-# (the appstore workflow makes those from the replica with tools/storeart): text, categories, age rating, screenshots,
-# the App Preview (its poster frame at 12 s, captions on screen), then free pricing,
-# availability everywhere except China mainland (an app sold there needs an MIIT filing) and the content-rights
-# answer, which deliver doesn't set. Never submits for review: Deyao does that.
+# Loads the App Store listing into App Store Connect from fastlane/metadata and fastlane/screenshots (the appstore
+# workflow makes the screenshots from the replica with tools/storeart): text, categories, age rating, screenshots, then
+# free pricing, availability everywhere except China mainland (an app sold there needs an MIIT filing) and the
+# content-rights answer, which deliver doesn't set. Never submits for review: Deyao does that.
 default_platform(:ios)
 
 platform :ios do
@@ -12,8 +11,6 @@ platform :ios do
     deliver(app_identifier: "dev.de0ch.cantonese", app_version: "1.0", platform: "ios",
             skip_binary_upload: true, submit_for_review: false, automatic_release: false, force: true,
             overwrite_screenshots: true, run_precheck_before_submit: false,
-            app_previews_path: "fastlane/previews", overwrite_preview_videos: true,
-            preview_frame_time_code: "00:00:12:00",
             app_rating_config_path: "fastlane/age_rating.json")
 
     client = Spaceship::ConnectAPI.client.tunes_request_client

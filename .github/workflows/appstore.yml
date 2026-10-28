@@ -1,9 +1,8 @@
-# Loads the App Store listing into App Store Connect (ios/fastlane: text, categories, age rating, screenshots, the App
-# Preview, free price, availability, content rights) with the App Store Connect API key. The screenshots and the preview
-# are made from the replica's demo test on an iPhone 17 Pro Max simulator (6.9-inch, 1320 x 2868) in light and dark (the
-# light one also records the screen) by tools/storeart: headline + the screenshot in a phone frame, and the recording
-# with the demo conversation's audio. It runs on every push to main that changes the listing or what the screenshots
-# show, so App Store Connect always matches git. It never submits for review.
+# Loads the App Store listing into App Store Connect (ios/fastlane: text, categories, age rating, screenshots, free
+# price, availability, content rights) with the App Store Connect API key. The screenshots are made by tools/storeart
+# (a headline over the screenshot in a phone frame) from the replica's demo test on an iPhone 17 Pro Max simulator
+# (6.9-inch, 1320 x 2868) in light and dark. It runs on every push to main that changes the listing or what the
+# screenshots show, so App Store Connect always matches git. It never submits for review.
 name: appstore
 on:
   workflow_dispatch:
@@ -21,7 +20,6 @@ jobs:
       upload: false
       device: iPhone 17 Pro Max
       appearance: ${{ matrix.appearance }}
-      record: ${{ matrix.appearance == 'light' }}   # the App Preview
     secrets: inherit
   listing:
     needs: replica
@@ -42,26 +40,16 @@ jobs:
           4bce16fbed09278cbdfb4d57749500038cdda70737925a846e3f6c59327ab46e  $F/NotoSansHK-Bold.otf
           8a43afea92bb58dfd9027bd7ac6f5b0b2662e2ffb3e7c1edc02c62b2b21924f1  $F/NotoSansHK-Regular.otf
           EOF
-      - name: Screenshots and App Preview for every localization (tools/storeart)
+      - name: Screenshots for every localization (tools/storeart)
         run: |
           S="$RUNNER_TEMP/screens"; ls -R "$S"
-          sudo apt-get install -y -qq ffmpeg > /dev/null
           cargo build -q --release --locked --manifest-path ../tools/storeart/Cargo.toml
           ART=../tools/storeart/target/release/storeart
           $ART stills --light "$S/replica-screens-light" --dark "$S/replica-screens-dark" --fonts "$RUNNER_TEMP/fonts" --out fastlane/screenshots
-          REC=$(find "$S/replica-screens-light" -name demo.mov | head -1); MARKS=$(find "$S/replica-screens-light" -name demo-marks.txt | head -1)
-          [ -n "$REC" ] && [ -n "$MARKS" ] || { echo "no demo recording" >&2; exit 1; }
-          cat "$MARKS"
-          $ART preview --recording "$REC" --marks "$MARKS" --audio ../testdata/demo/demo-16k.wav --fonts "$RUNNER_TEMP/fonts" --out fastlane/previews
           python3 -c "import struct,glob;[print(f,struct.unpack('>IIBB',open(f,'rb').read()[16:26])) for f in sorted(glob.glob('fastlane/screenshots/*/*.png'))]"
-          ffprobe -v error -show_entries format=duration:stream=codec_name,profile,width,height,r_frame_rate,channels,sample_rate -of compact fastlane/previews/zh-Hant/*.mp4
-      - name: Keep the store art
+      - name: Keep the screenshots
         uses: actions/upload-artifact@v4
-        with:
-          name: store-art
-          path: |
-            ios/fastlane/screenshots
-            ios/fastlane/previews
+        with: { name: store-screenshots, path: ios/fastlane/screenshots }
       - name: Load the listing (no review submission)
         env:
           ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
