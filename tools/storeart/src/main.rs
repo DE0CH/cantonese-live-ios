@@ -23,15 +23,14 @@ struct Copy {
 
 const LOCALES: [&str; 3] = ["zh-Hant", "en-GB", "en-US"];
 
-/// 0: captions, 1: three languages, 2: on the phone, 3: the live (grey) line.
-fn copy(locale: &str) -> [Copy; 4] {
+/// 0: captions, 1: three languages, 2: on the phone.
+fn copy(locale: &str) -> [Copy; 3] {
     let recognised = if locale == "en-US" { "recognized" } else { "recognised" };
     match locale {
         "zh-Hant" => [
             Copy { head: "講廣東話，即刻出字幕", sub: "身邊嘅說話，即時變成香港繁體字幕" },
             Copy { head: "中英普，混埋講都得", sub: "廣東話、英文、普通話一齊認得" },
             Copy { head: "全部喺手機度運行", sub: "唔使上網，唔收集任何資料" },
-            Copy { head: "一路講，一路出", sub: "未講完嗰句用灰色，講完即刻定稿" },
         ],
         _ => [
             Copy { head: "Speak Cantonese, see captions", sub: "What people around you say, as live Hong Kong Chinese captions" },
@@ -44,7 +43,6 @@ fn copy(locale: &str) -> [Copy; 4] {
                 },
             },
             Copy { head: "Runs entirely on your iPhone", sub: "Works offline. No data collected." },
-            Copy { head: "Captions as people talk", sub: "The line still being spoken shows in grey" },
         ],
     }
 }
@@ -265,7 +263,6 @@ fn stills(args: &HashMap<String, String>) {
         ("1-captions", find_shot(light, "-demo-captions.png")),
         ("2-languages", find_shot(dark, "-demo-captions.png")),
         ("3-on-device", find_shot(light, "-demo-welcome.png")),
-        ("4-live", find_shot(light, "-demo-middle.png")),
     ];
     for locale in LOCALES {
         let dir = Path::new(&args["out"]).join(locale);

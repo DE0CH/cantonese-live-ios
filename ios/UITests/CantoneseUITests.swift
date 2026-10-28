@@ -90,9 +90,7 @@ final class CantoneseUITests: XCTestCase {
         while Date() < ready, status(app) != "聽緊" { Thread.sleep(forTimeInterval: 0.2) }
         XCTAssertEqual(status(app), "聽緊")
         // The conversation is 19.2 s, then a second of silence; the last line is finished soon after.
-        Thread.sleep(forTimeInterval: 11)
-        shot(app, "demo-middle")
-        Thread.sleep(forTimeInterval: 11)
+        Thread.sleep(forTimeInterval: 22)
         shot(app, "demo-captions")
         Thread.sleep(forTimeInterval: 3)
         let text = app.staticTexts["transcript"].label
