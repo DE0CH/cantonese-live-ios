@@ -1,7 +1,7 @@
 import XCTest
 
 /// The phone replica: walks every flow on the simulator, streaming the bundled Cantonese clip instead of the mic. The
-/// simulator can't run MLX, so a stand-in answers for the model (Transcriber.swift); VAD, segments, OpenCC and the UI
+/// simulator can't run MLX, so a stand-in answers for the model (Transcriber.swift); line cuts, OpenCC and the UI
 /// are real.
 final class CantoneseUITests: XCTestCase {
     func testEveryFlow() throws {
@@ -27,7 +27,7 @@ final class CantoneseUITests: XCTestCase {
         XCTAssertEqual(status(app), "聽緊", "never started listening (\(status(app)))")
         shot(app, "listening")
 
-        // The 7.5 s clip and a second of silence end one segment; its transcription lands as a committed line.
+        // The 7.5 s clip is cut into lines at its quietest point near 6 s; the first lands as a finished line.
         let transcript = app.staticTexts["transcript"]
         let deadline = Date().addingTimeInterval(60)
         while Date() < deadline, !(transcript.exists && transcript.label.contains("我哋")) {

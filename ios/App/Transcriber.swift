@@ -3,17 +3,17 @@ import Foundation
 import OpenCC
 import os
 import Qwen3ASR
-import SpeechVAD
 import UIKit
 
 /// Transcribes on the phone: Qwen3-ASR 1.7B (5-bit, aufklarer/Qwen3-ASR-1.7B-MLX-5bit) on the GPU through MLX, via
 /// speech-swift. Nothing leaves the phone. iOS allows no GPU work in the background, so it works with the app on
 /// screen: the screen stays awake while listening, and leaving the app stops it.
 ///
-/// The mic's 16 kHz audio goes through Silero VAD (CoreML). Speech is cut into segments at pauses (or at 10 s); while a
-/// segment is still being spoken it is transcribed again as pending text whenever the model is free and 0.5 s more has
-/// been said, and when it ends it is transcribed once more and becomes a finished line. The model works on one segment
-/// at a time on its own queue; a finished segment always goes before a pending refresh.
+/// The model runs all the time, with no speech detection in front of it: whenever it is free and 0.5 s more of the mic's
+/// 16 kHz audio has come in, everything since the last finished line is transcribed again as the pending line. Once that
+/// audio reaches 6 s it is cut at its quietest 20 ms in the last 2 s; the part before the cut is transcribed once more
+/// and becomes a finished line. The model works on one job at a time on its own queue; a finished line always goes
+/// before a pending refresh.
 @MainActor
 final class Transcriber: ObservableObject {
     enum State: Equatable { case idle, loading(String), listening, failed(String) }
@@ -53,7 +53,7 @@ final class Transcriber: ObservableObject {
                 worker.onUpdate = { [weak self] lines in
                     Task { @MainActor in self?.lines = lines }
                 }
-                worker.begin(partials: !testAudio)
+                worker.begin()
                 self.worker = worker
             } catch is CancellationError {
                 return
@@ -182,59 +182,63 @@ final class Transcriber: ObservableObject {
     }
 }
 
-/// The models and everything that touches them. Audio state lives on audioQueue, the model runs on modelQueue.
+/// The model and everything that touches it. Audio state lives on audioQueue, the model runs on modelQueue.
 final class Worker: @unchecked Sendable {
     static let log = Logger(subsystem: "dev.de0ch.cantonese", category: "model")
 
-    /// One segment's text: final once the whole segment has been transcribed, pending (and may change) until then.
+    /// One line's text: final once its audio has been transcribed for the last time, pending (and may change) until then.
     struct Line: Identifiable { let id: Int; var text: String; var final: Bool }
-    private struct Segment { let id: Int; var audio: [Float] }
+    private struct Segment { let id: Int; let audio: [Float] }
 
     /// Every line on screen, after each change.
     var onUpdate: (([Line]) -> Void)?
 
     private let asr: ([Float]) throws -> String
-    private let vad: SileroVADModel
     private let convert: ChineseConverter
     private let audioQueue = DispatchQueue(label: "cantonese.audio")
     private let modelQueue = DispatchQueue(label: "cantonese.model", qos: .userInitiated)
 
     // audioQueue state
     private var lines: [Line] = []
-    private var current: Segment?        // being spoken
-    private var ended: [Segment] = []     // spoken, waiting for the model
-    private var lastPartial = 0           // samples of current at its last pending transcription
-    private var vadBuffer: [Float] = []
-    private var preRoll: [Float] = []
-    private var silentChunks = 0
-    private var nextId = 0
+    private var buffer: [Float] = []      // audio since the last finished line
+    private var currentId = 0             // the line buffer becomes
+    private var ended: [Segment] = []     // cut off, waiting for their final transcription
+    private var lastPartial = 0           // buffer.count at the last pending transcription
+    private var keepFrom = 0              // lines below this id were cleared
     private var busy = false
     private var running = false
-    private var partials = true
 
-    private static let chunk = SileroVADModel.chunkSize            // 512 samples = 32 ms
-    private static let startProb: Float = 0.5
-    private static let stopProb: Float = 0.35
-    private static let endSilenceChunks = 19                         // ~0.6 s pause ends a segment
-    private static let maxSamples = 10 * 16000                       // force a cut at 10 s
-    private static let preRollSamples = 5 * 512                      // keep 160 ms before speech starts
-    private static let partialEvery = 8_000                          // refresh pending once 0.5 s more audio is in and the model is free
+    private static let partialEvery = 8_000          // refresh pending once 0.5 s more audio is in and the model is free
+    private static let maxSamples = 6 * 16000        // a line is cut once its audio reaches 6 s
+    private static let cutWindow = 2 * 16000         // ...at the quietest 20 ms of its last 2 s
+    private static let quietFrame = 320
 
     private static var cached: Worker?
 
-    /// Loads the models shipped inside the app (ios/fetch-model.sh puts them in Model/) once and keeps them.
+    /// Loads the model shipped inside the app (ios/fetch-model.sh puts it in Model/) once and keeps it.
     static func shared() async throws -> Worker {
         if let w = cached { return w }
         guard let dir = Bundle.main.url(forResource: "Model", withExtension: nil) else {
             throw CocoaError(.fileNoSuchFile)
         }
         #if targetEnvironment(simulator)
-        // The simulator has no Metal for MLX, so the UI tests run everything but the model: this stand-in answers each
-        // segment of the bundled clip with what the model says for it (in its Simplified output, so OpenCC still runs).
-        // The real model is heard on a Mac by the model-check workflow.
-        let lines = ["我哋今日去咗饮茶，啲虾饺好好食。", "佢话听日会再嚟。"]
-        var said = 0
-        let asr: ([Float]) throws -> String = { _ in defer { said += 1 }; return lines[min(said, lines.count - 1)] }
+        // The simulator has no Metal for MLX, so the UI tests run everything but the model: this stand-in finds where the
+        // audio sits in the bundled clip and answers with the clauses of what the model says for it (in its Simplified
+        // output, so OpenCC still runs) whose middle falls inside it. The real model is heard on a Mac by model-check.
+        _ = dir
+        let clip = Bundle.main.url(forResource: "cantonese-16k", withExtension: "wav").flatMap { try? Data(contentsOf: $0) }
+            .map { $0.dropFirst(44).withUnsafeBytes { raw in raw.bindMemory(to: Int16.self).map { Float($0) / 32768 } } } ?? []
+        let clauses: [(text: String, middle: Double)] = [("我哋今日去咗饮茶，", 0.28), ("啲虾饺好好食。", 0.78)]
+        let asr: ([Float]) throws -> String = { audio in
+            // Match 10 ms from the first sound in the audio (the silence after the clip matches nothing: no words).
+            guard let k = audio.firstIndex(where: { $0 != 0 }), k + 160 <= audio.count else { return "" }
+            let probe = audio[k..<(k + 160)]
+            guard let at = (0...max(0, clip.count - 160)).first(where: { o in
+                zip(clip[o..<(o + 160)], probe).allSatisfy { $0 == $1 }
+            }) else { return "" }
+            let from = Double(at - k) / Double(clip.count), to = Double(at - k + audio.count) / Double(clip.count)
+            return clauses.filter { $0.middle >= from && $0.middle < to }.map(\.text).joined()
+        }
         #else
         let model = try await Qwen3ASRModel.fromPretrained(
             modelId: "aufklarer/Qwen3-ASR-1.7B-MLX-5bit", cacheDir: dir.appendingPathComponent("asr"), offlineMode: true)
@@ -244,43 +248,40 @@ final class Worker: @unchecked Sendable {
             return try model.transcribeThrowing(audio: audio, sampleRate: 16000, options: options)
         }
         #endif
-        let vad = try await SileroVADModel.fromPretrained(engine: .coreml, cacheDir: dir.appendingPathComponent("vad"),
-                                                          offlineMode: true)
         let convert = try ChineseConverter(options: [.traditionalize, .hkStandard])
-        log.notice("models loaded")
-        let w = Worker(asr: asr, vad: vad, convert: convert)
+        log.notice("model loaded")
+        let w = Worker(asr: asr, convert: convert)
         cached = w
         return w
     }
 
-    private init(asr: @escaping ([Float]) throws -> String, vad: SileroVADModel, convert: ChineseConverter) {
+    private init(asr: @escaping ([Float]) throws -> String, convert: ChineseConverter) {
         self.asr = asr
-        self.vad = vad
         self.convert = convert
     }
 
-    func begin(partials: Bool) {
+    func begin() {
         audioQueue.async { [self] in
             running = true
-            self.partials = partials
-            vad.resetState()
-            vadBuffer = []; preRoll = []; silentChunks = 0; current = nil
+            buffer = []
+            lastPartial = 0
         }
     }
 
-    /// Stop listening: the segment being spoken ends now and is still transcribed.
+    /// Stop listening: what has been said since the last finished line is still transcribed and becomes one.
     func end() {
         audioQueue.async { [self] in
             running = false
-            endCurrent()
+            cut(at: buffer.count)
         }
     }
 
-    /// Clear the screen: everything already spoken goes, the segment being spoken carries on.
+    /// Clear the screen: everything already finished goes, the line being spoken carries on.
     func clear() {
         audioQueue.async { [self] in
             ended = []
-            lines.removeAll { $0.id != current?.id }
+            keepFrom = currentId
+            lines.removeAll { $0.id != currentId }
             onUpdate?(lines)
         }
     }
@@ -288,64 +289,58 @@ final class Worker: @unchecked Sendable {
     func feed(_ samples: [Float]) {
         audioQueue.async { [self] in
             guard running else { return }
-            vadBuffer += samples
-            while vadBuffer.count >= Self.chunk {
-                let c = Array(vadBuffer.prefix(Self.chunk))
-                vadBuffer.removeFirst(Self.chunk)
-                step(c, prob: vad.processChunk(c))
-            }
+            buffer += samples
+            if buffer.count >= Self.maxSamples { cut(at: quietest()) }
             schedule()
         }
     }
 
-    private func step(_ c: [Float], prob: Float) {
-        if current != nil {
-            current!.audio += c
-            silentChunks = prob < Self.stopProb ? silentChunks + 1 : 0
-            if silentChunks >= Self.endSilenceChunks || current!.audio.count >= Self.maxSamples { endCurrent() }
-        } else {
-            preRoll += c
-            if preRoll.count > Self.preRollSamples { preRoll.removeFirst(preRoll.count - Self.preRollSamples) }
-            if prob >= Self.startProb {
-                Self.log.notice("segment \(self.nextId) starts (vad \(prob))")
-                current = Segment(id: nextId, audio: preRoll)
-                lines.append(Line(id: nextId, text: "", final: false))
-                nextId += 1
-                preRoll = []
-                silentChunks = 0
-                lastPartial = 0
-            }
+    /// Where in the last 2 s of buffer the 20 ms with the least energy starts.
+    private func quietest() -> Int {
+        var best = buffer.count, bestEnergy = Float.infinity
+        var i = buffer.count - Self.cutWindow
+        while i + Self.quietFrame <= buffer.count {
+            var e: Float = 0
+            for j in i..<(i + Self.quietFrame) { e += buffer[j] * buffer[j] }
+            if e < bestEnergy { bestEnergy = e; best = i + Self.quietFrame / 2 }
+            i += Self.quietFrame / 2
         }
+        return best
     }
 
-    private func endCurrent() {
-        if let s = current {
-            Self.log.notice("segment \(s.id) ends: \(s.audio.count / 16) ms")
-            ended.append(s)
+    /// The audio before `at` becomes the current line's last transcription; the rest starts the next line.
+    private func cut(at: Int) {
+        if at > 0 {
+            Self.log.notice("line \(self.currentId) ends: \(at / 16) ms")
+            ended.append(Segment(id: currentId, audio: Array(buffer[..<at])))
+            buffer.removeFirst(at)
+            currentId += 1
         }
-        current = nil
-        silentChunks = 0
+        lastPartial = 0
         schedule()
     }
 
-    /// Start the next transcription if the model is free: the oldest ended segment first, else a pending refresh.
+    /// Start the next transcription if the model is free: the oldest finished line first, else a pending refresh.
     private func schedule() {
         guard !busy else { return }
         let job: Segment, final: Bool
         if !ended.isEmpty {
             job = ended.removeFirst(); final = true
-        } else if partials, let s = current, s.audio.count - lastPartial >= Self.partialEvery {
-            job = s; final = false; lastPartial = s.audio.count
+        } else if running, buffer.count - lastPartial >= Self.partialEvery {
+            job = Segment(id: currentId, audio: buffer); final = false; lastPartial = buffer.count
         } else { return }
         busy = true
         modelQueue.async { [self] in
             let text = job.audio.count < 4000 ? "" : transcribe(job.audio)
             audioQueue.async { [self] in
                 busy = false
-                // The line is gone if the screen was cleared meanwhile; a finished segment with no words leaves. One job
-                // runs at a time, so a segment's final always lands after its pending refreshes.
+                // One job runs at a time and ids only grow, so a line's final lands after its pending refreshes and lines
+                // stay in order. A cleared line doesn't come back; a finished line with no words leaves.
                 if let i = lines.firstIndex(where: { $0.id == job.id }) {
                     if final && text.isEmpty { lines.remove(at: i) } else { lines[i] = Line(id: job.id, text: text, final: final) }
+                    onUpdate?(lines)
+                } else if job.id >= keepFrom, !text.isEmpty {
+                    lines.append(Line(id: job.id, text: text, final: final))
                     onUpdate?(lines)
                 }
                 schedule()

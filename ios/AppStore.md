@@ -20,7 +20,7 @@ App record 6826497735, bundle `dev.de0ch.cantonese`, version 1.0, the newest Tes
 | Support URL | https://github.com/DE0CH/cantonese-live-ios/issues |
 | App privacy | Data Not Collected |
 | Encryption | None (`ITSAppUsesNonExemptEncryption` = false) |
-| Content rights | Contains third-party content: yes (Qwen3-ASR, Apache 2.0; Silero VAD, MIT) |
+| Content rights | Contains third-party content: yes (Qwen3-ASR, Apache 2.0) |
 | Sign-in for review | Not needed |
 
 ## Listing text
@@ -31,8 +31,8 @@ Description, keywords, promotional text, subtitle and name per localization live
 ## Review notes
 
 The app transcribes speech on the device with Qwen3-ASR 1.7B (MLX, on the GPU) and makes no network requests. Tap the
-microphone button and speak Cantonese (or play a Cantonese video near the phone); captions appear after the speaker
-pauses, the line being spoken refreshes as often as the phone keeps up (at most every 0.5 s). Loading the model takes a few seconds on the first tap.
+microphone button and speak Cantonese (or play a Cantonese video near the phone); captions appear while you speak and refresh as
+often as the phone keeps up (at most every 0.5 s); every few seconds a line is finished. Loading the model takes a few seconds on the first tap.
 iOS does not allow GPU work in the background, so leaving the app stops listening. No account is needed.
 
 ## Devices
@@ -51,4 +51,4 @@ and dark, the welcome sheet, 關於).
 ## Licences
 
 The 關於 sheet (ⓘ, top left) lists every open-source part shipped (Qwen3-ASR and speech-swift, swift-transformers,
-OpenCC: Apache 2.0; Silero VAD, MLX, MLX Swift, SwiftyOpenCC: MIT) with its licence text (`ios/App/Licences/`).
+OpenCC: Apache 2.0; MLX, MLX Swift, SwiftyOpenCC: MIT) with its licence text (`ios/App/Licences/`).

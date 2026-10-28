@@ -38,8 +38,6 @@ targets:
     dependencies:
       - package: SpeechSwift
         product: Qwen3ASR
-      - package: SpeechSwift
-        product: SpeechVAD
       - package: SwiftyOpenCC
         product: OpenCC
     entitlements:

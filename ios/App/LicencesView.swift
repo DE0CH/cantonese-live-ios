@@ -10,7 +10,6 @@ struct LicencesView: View {
 
     private let parts = [
         Part(name: "Qwen3-ASR 1.7B", use: "語音辨識模型（Qwen 團隊；MLX 5-bit 版 aufklarer）", licence: "Apache 2.0", file: "Apache-2.0"),
-        Part(name: "Silero VAD", use: "偵測有冇人講嘢（Silero Team）", licence: "MIT", file: "MIT-silero-vad"),
         Part(name: "speech-swift", use: "喺 iPhone 度行模型（soniqo）", licence: "Apache 2.0", file: "Apache-2.0"),
         Part(name: "MLX Swift", use: "GPU 運算（Apple）", licence: "MIT", file: "MIT-mlx-swift"),
         Part(name: "MLX", use: "GPU 運算（Apple）", licence: "MIT", file: "MIT-mlx"),
