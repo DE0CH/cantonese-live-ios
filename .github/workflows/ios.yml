@@ -10,10 +10,15 @@ on:
       upload: { description: "Upload to TestFlight", type: boolean, default: true }
       device: { description: "Simulator (iPhone 17 Pro Max gives the 6.9-inch App Store screenshots)", type: string, default: "iPhone 17" }
       appearance: { description: "Simulator appearance", type: choice, options: [light, dark], default: light }
+  workflow_call:   # the appstore workflow runs the replica on an iPhone 17 Pro Max for the screenshots
+    inputs:
+      upload: { type: boolean, default: false }
+      device: { type: string, default: "iPhone 17" }
+      appearance: { type: string, default: light }
   push:
     branches: [main]
     paths: ["ios/**", "testdata/**", ".github/workflows/ios.yml"]
-concurrency: { group: ios, cancel-in-progress: false }
+concurrency: { group: "ios-${{ github.workflow }}-${{ inputs.appearance || 'light' }}", cancel-in-progress: false }
 permissions: { contents: read }
 defaults:
   run:
@@ -88,7 +93,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: replica-screens
+          name: replica-screens-${{ inputs.appearance || 'light' }}
           path: |
             ${{ runner.temp }}/screens/*.png
             ${{ runner.temp }}/test.log

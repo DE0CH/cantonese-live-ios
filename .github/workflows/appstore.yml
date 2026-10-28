@@ -1,0 +1,43 @@
+# Loads the App Store listing into App Store Connect (ios/fastlane: text, categories, age rating, screenshots, free
+# price, availability, content rights) with the App Store Connect API key. The screenshots are the replica's, on an
+# iPhone 17 Pro Max simulator (6.9-inch, 1320 x 2868) in light and dark. It never submits for review.
+name: appstore
+on: { workflow_dispatch: {} }
+permissions: { contents: read }
+jobs:
+  replica:
+    strategy: { matrix: { appearance: [light, dark] } }
+    uses: ./.github/workflows/ios.yml
+    with: { upload: false, device: "iPhone 17 Pro Max", appearance: "${{ matrix.appearance }}" }
+    secrets: inherit
+  listing:
+    needs: replica
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults: { run: { working-directory: ios } }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with: { pattern: replica-screens-*, path: "${{ runner.temp }}/screens" }
+      - name: Screenshots for every localization
+        run: |
+          S="$RUNNER_TEMP/screens"; ls -R "$S"
+          pick() { ls "$S/replica-screens-$1/"*"-$2.png" | head -1; }
+          for l in zh-Hant en-GB en-US; do
+            mkdir -p "fastlane/screenshots/$l"
+            cp "$(pick light transcribed)" "fastlane/screenshots/$l/1-transcribed.png"
+            cp "$(pick dark transcribed)" "fastlane/screenshots/$l/2-transcribed-dark.png"
+            cp "$(pick light welcome)" "fastlane/screenshots/$l/3-welcome.png"
+            cp "$(pick light about)" "fastlane/screenshots/$l/4-about.png"
+          done
+          python3 -c "import struct,sys,glob;[print(f,struct.unpack('>II',open(f,'rb').read()[16:24])) for f in sorted(glob.glob('fastlane/screenshots/zh-Hant/*.png'))]"
+      - name: Load the listing (no review submission)
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_PRIVATE_KEY: ${{ secrets.ASC_PRIVATE_KEY }}
+          FASTLANE_SKIP_UPDATE_CHECK: "1"
+          FASTLANE_HIDE_CHANGELOG: "1"
+        run: |
+          sudo gem install fastlane --no-document > /dev/null
+          fastlane listing

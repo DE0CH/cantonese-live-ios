@@ -1,0 +1,65 @@
+# Loads the App Store listing into App Store Connect from fastlane/metadata and fastlane/screenshots (the appstore
+# workflow puts the replica's screenshots there): text, categories, age rating, screenshots, then free pricing,
+# availability everywhere except China mainland (an app sold there needs an MIIT filing) and the content-rights
+# answer, which deliver doesn't set. Never submits for review: Deyao does that.
+default_platform(:ios)
+
+platform :ios do
+  lane :listing do
+    app_store_connect_api_key(key_id: ENV["ASC_KEY_ID"], issuer_id: ENV["ASC_ISSUER_ID"],
+                              key_content: ENV["ASC_PRIVATE_KEY"])
+    deliver(app_identifier: "dev.de0ch.cantonese", app_version: "1.0", platform: "ios",
+            skip_binary_upload: true, submit_for_review: false, automatic_release: false, force: true,
+            overwrite_screenshots: true, run_precheck_before_submit: false,
+            app_rating_config_path: "fastlane/age_rating.json")
+
+    client = Spaceship::ConnectAPI.client.tunes_request_client
+    app = Spaceship::ConnectAPI::App.find("dev.de0ch.cantonese")
+    client.patch("v1/apps/#{app.id}", { data: { type: "apps", id: app.id,
+                                                attributes: { contentRightsDeclaration: "USES_THIRD_PARTY_CONTENT" } } })
+
+    # Free: the USA price point at 0.00 as the base price, which every territory follows.
+    points = client.get("v1/apps/#{app.id}/appPricePoints", { "filter[territory]" => "USA", limit: 200 }).body["data"]
+    free = points.find { |p| p["attributes"]["customerPrice"].to_f.zero? } or UI.user_error!("no free price point")
+    client.post("v1/appPriceSchedules", {
+      data: { type: "appPriceSchedules", relationships: {
+        app: { data: { type: "apps", id: app.id } },
+        baseTerritory: { data: { type: "territories", id: "USA" } },
+        manualPrices: { data: [{ type: "appPrices", id: "${free}" }] } } },
+      included: [{ type: "appPrices", id: "${free}", attributes: { startDate: nil },
+                   relationships: { appPricePoint: { data: { type: "appPricePoints", id: free["id"] } } } }] })
+    UI.success("Price: free")
+
+    territories = client.get("v1/territories", { limit: 200 }).body["data"].map { |t| t["id"] }
+    existing = begin
+      client.get("v1/apps/#{app.id}/appAvailabilityV2").body["data"]
+    rescue StandardError
+      nil
+    end
+    if existing
+      avail = client.get("v2/appAvailabilities/#{existing['id']}/territoryAvailabilities", { limit: 200, include: "territory" }).body["data"]
+      avail.each do |ta|
+        want = ta["relationships"]&.dig("territory", "data", "id") != "CHN"
+        next if ta["attributes"]["available"] == want
+        client.patch("v1/territoryAvailabilities/#{ta['id']}",
+                     { data: { type: "territoryAvailabilities", id: ta["id"], attributes: { available: want } } })
+      end
+    else
+      client.post("v2/appAvailabilities", {
+        data: { type: "appAvailabilities", attributes: { availableInNewTerritories: true }, relationships: {
+          app: { data: { type: "apps", id: app.id } },
+          territoryAvailabilities: { data: territories.map { |t| { type: "territoryAvailabilities", id: "${#{t}}" } } } } },
+        included: territories.map { |t|
+          { type: "territoryAvailabilities", id: "${#{t}}", attributes: { available: t != "CHN" },
+            relationships: { territory: { data: { type: "territories", id: t } } } } } })
+    end
+    UI.success("Available in #{territories.size - 1} territories (not CHN)")
+  end
+
+  # App Privacy has no API-key endpoint: this runs with an Apple ID session (FASTLANE_SESSION, FASTLANE_USER) from a
+  # Jarvis session, not in CI.
+  lane :privacy do
+    upload_app_privacy_details_to_app_store(app_identifier: "dev.de0ch.cantonese",
+                                            json_path: "fastlane/app_privacy.json")
+  end
+end

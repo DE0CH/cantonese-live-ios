@@ -54,7 +54,7 @@ targets:
     info:
       path: App/Info.plist
       properties:
-        CFBundleDisplayName: 粵語字幕
+        CFBundleDisplayName: 廣東話字幕
         CFBundleShortVersionString: "$(MARKETING_VERSION)"
         CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
         ITSAppUsesNonExemptEncryption: false

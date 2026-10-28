@@ -62,7 +62,7 @@ final class Transcriber: ObservableObject {
                 return
             }
             if !testAudio, !(await AVAudioApplication.requestRecordPermission()) {
-                fail("未有權限用咪：去「設定」>「粵語字幕」開返")
+                fail("未有權限用咪：去「設定」>「廣東話字幕」開返")
                 return
             }
             do {

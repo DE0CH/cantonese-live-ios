@@ -1,0 +1,12 @@
+廣東話字幕 (Cantonese Live Captions) turns the Cantonese around you into live Hong Kong Traditional Chinese captions.
+
+Features:
+• Live captions: the sentence being spoken shows in grey, then settles once it ends
+• Cantonese, English and Mandarin, even mixed in one sentence
+• Hong Kong Traditional Chinese characters
+• Runs entirely on your iPhone, no internet needed
+• No data collected: audio and text never leave the phone
+• Select and copy the captions
+• Uses the iPhone's built-in microphone, so Bluetooth headphones keep playing music
+
+Keep the app on screen while it listens; the screen stays on. Switching apps or locking the phone stops it. Requires an iPhone with 8 GB of memory (iPhone 15 Pro or later).

@@ -1,4 +1,4 @@
-# 粵語字幕 (Cantonese Live Captions): privacy policy
+# 廣東話字幕 (Cantonese Live Captions): privacy policy
 
 The iOS app collects nothing.
 

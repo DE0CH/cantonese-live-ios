@@ -1,4 +1,10 @@
-# Cantonese live
+# 廣東話字幕
+
+我是一名來自北京的新港人。來港以後，我逐漸學會了一些繁體字、英文和廣東話，但總是希望現實生活也能像看動畫一樣有即時字幕，讓我聽懂身邊每一句話。找不到一個針對這個需要的應用程式，我便 vibe code 了這個 app。
+
+所有運算都在手機上進行，包括使用 Qwen3-ASR 1.7B 的語音轉寫模型，因此無需連接互聯網，也不會有任何人收集任何資料。
+
+## How it works
 
 Live transcription of Cantonese (mixed with Mandarin and English), as spoken, in Hong Kong Traditional characters.
 Nothing is stored. The iOS app runs the model on the phone (Qwen3-ASR 1.7B on the GPU through MLX); the web page

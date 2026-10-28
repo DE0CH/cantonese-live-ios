@@ -21,7 +21,7 @@ struct ContentView: View {
                                            description: Text("撳個咪，講廣東話，字幕會即時出現。全部喺部手機度轉，唔使上網。"))
                 }
             }
-            .navigationTitle("粵語字幕")
+            .navigationTitle("廣東話字幕")
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     Button("關於", systemImage: "info.circle") { showLicences = true }
@@ -35,10 +35,14 @@ struct ContentView: View {
             }
             .bottomBar { controls }
             .sheet(isPresented: $showLicences) { LicencesView() }
+            .sheet(isPresented: $showWelcome, onDismiss: { welcomed = true }) { WelcomeView() }
         }
+        .onAppear { if !welcomed { showWelcome = true } }
     }
 
     @State private var showLicences = false
+    @State private var showWelcome = false
+    @AppStorage("welcomed") private var welcomed = false
 
     /// Finished lines in the primary colour, the line still being spoken in grey.
     private var transcript: Text {

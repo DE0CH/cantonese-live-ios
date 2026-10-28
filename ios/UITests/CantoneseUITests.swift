@@ -8,6 +8,13 @@ final class CantoneseUITests: XCTestCase {
         let app = XCUIApplication()
         app.launchEnvironment["CANTONESE_TEST_AUDIO"] = "1"
         app.launch()
+
+        // First start: the welcome sheet, once.
+        let go = app.buttons["continue"]
+        XCTAssertTrue(go.waitForExistence(timeout: 10), "no welcome sheet on the first start")
+        shot(app, "welcome")
+        go.tap()
+        XCTAssertTrue(app.buttons["mic"].waitForExistence(timeout: 10), "welcome sheet didn't close")
         shot(app, "launch")
 
         XCTAssertFalse(app.buttons["clear"].isEnabled, "clear is on with nothing to clear")
@@ -55,6 +62,12 @@ final class CantoneseUITests: XCTestCase {
         app.buttons["mic"].tap()
         XCTAssertTrue(app.staticTexts["聽緊"].waitForExistence(timeout: 60), "second start was slow (\(status(app)))")
         app.buttons["mic"].tap()
+
+        // The welcome sheet doesn't come back.
+        app.terminate()
+        app.launch()
+        XCTAssertTrue(app.buttons["mic"].waitForExistence(timeout: 10))
+        XCTAssertFalse(app.buttons["continue"].exists, "welcome sheet shown again")
     }
 
     private func status(_ app: XCUIApplication) -> String { app.staticTexts["status"].label }
