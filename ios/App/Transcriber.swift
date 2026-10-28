@@ -11,7 +11,7 @@ import UIKit
 /// screen: the screen stays awake while listening, and leaving the app stops it.
 ///
 /// The mic's 16 kHz audio goes through Silero VAD (CoreML). Speech is cut into segments at pauses (or at 10 s); while a
-/// segment is still being spoken it is transcribed again every so often as pending text, and when it ends it is
+/// segment is still being spoken it is transcribed again as pending text whenever the model is free and 0.5 s more has been said, and when it ends it is
 /// transcribed once more and becomes a finished line. The model works on one segment at a time on its own queue; a
 /// finished segment always goes before a pending refresh.
 @MainActor
@@ -218,7 +218,7 @@ final class Worker: @unchecked Sendable {
     private static let endSilenceChunks = 19                         // ~0.6 s pause ends a segment
     private static let maxSamples = 10 * 16000                       // force a cut at 10 s
     private static let preRollSamples = 5 * 512                      // keep 160 ms before speech starts
-    private static let partialEvery = 24_000                         // refresh pending after 1.5 s more audio
+    private static let partialEvery = 8_000                          // refresh pending once 0.5 s more audio is in and the model is free
 
     private static var cached: Worker?
 

@@ -32,7 +32,7 @@ Description, keywords, promotional text, subtitle and name per localization live
 
 The app transcribes speech on the device with Qwen3-ASR 1.7B (MLX, on the GPU) and makes no network requests. Tap the
 microphone button and speak Cantonese (or play a Cantonese video near the phone); captions appear after the speaker
-pauses, the line being spoken refreshes about every 1.5 s. Loading the model takes a few seconds on the first tap.
+pauses, the line being spoken refreshes as often as the phone keeps up (at most every 0.5 s). Loading the model takes a few seconds on the first tap.
 iOS does not allow GPU work in the background, so leaving the app stops listening. No account is needed.
 
 ## Devices
