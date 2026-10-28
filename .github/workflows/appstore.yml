@@ -1,8 +1,14 @@
 # Loads the App Store listing into App Store Connect (ios/fastlane: text, categories, age rating, screenshots, free
 # price, availability, content rights) with the App Store Connect API key. The screenshots are the replica's, on an
-# iPhone 17 Pro Max simulator (6.9-inch, 1320 x 2868) in light and dark. It never submits for review.
+# iPhone 17 Pro Max simulator (6.9-inch, 1320 x 2868) in light and dark. It runs on every push to main that changes the
+# listing or what the screenshots show, so App Store Connect always matches git. It never submits for review.
 name: appstore
-on: { workflow_dispatch: {} }
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ["ios/fastlane/**", "ios/App/**", "ios/UITests/**", ".github/workflows/appstore.yml"]
+concurrency: { group: appstore, cancel-in-progress: true }   # the newest listing wins
 permissions: { contents: read }
 jobs:
   replica:

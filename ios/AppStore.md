@@ -44,8 +44,8 @@ other way round, so this floor can only be lowered, not raised, after release.
 
 ## Screenshots
 
-6.9-inch iPhone (1320 × 2868), the one size required, from the `ios` workflow run by hand with `device` = iPhone 17
-Pro Max (light and dark, `upload` off): the UI test's shots while streaming the bundled clip (finished captions in light
+6.9-inch iPhone (1320 × 2868), the one size required, taken by the `appstore` workflow on every push (the `ios`
+workflow on an iPhone 17 Pro Max, light and dark, no upload): the UI test's shots while streaming the bundled clip (finished captions in light
 and dark, the welcome sheet, 關於).
 
 ## Licences
