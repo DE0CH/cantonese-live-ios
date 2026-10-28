@@ -2,3 +2,5 @@
 build/
 App/Cantonese.entitlements
 Model/
+fastlane/screenshots/
+fastlane/previews/

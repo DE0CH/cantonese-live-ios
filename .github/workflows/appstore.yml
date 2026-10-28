@@ -1,20 +1,27 @@
-# Loads the App Store listing into App Store Connect (ios/fastlane: text, categories, age rating, screenshots, free
-# price, availability, content rights) with the App Store Connect API key. The screenshots are the replica's, on an
-# iPhone 17 Pro Max simulator (6.9-inch, 1320 x 2868) in light and dark. It runs on every push to main that changes the
-# listing or what the screenshots show, so App Store Connect always matches git. It never submits for review.
+# Loads the App Store listing into App Store Connect (ios/fastlane: text, categories, age rating, screenshots, the App
+# Preview, free price, availability, content rights) with the App Store Connect API key. The screenshots and the preview
+# are made from the replica's demo test on an iPhone 17 Pro Max simulator (6.9-inch, 1320 x 2868) in light and dark (the
+# light one also records the screen) by tools/storeart: headline + the screenshot in a phone frame, and the recording
+# with the demo conversation's audio. It runs on every push to main that changes the listing or what the screenshots
+# show, so App Store Connect always matches git. It never submits for review.
 name: appstore
 on:
   workflow_dispatch:
   push:
     branches: [main]
-    paths: ["ios/fastlane/**", "ios/App/**", "ios/UITests/**", ".github/workflows/appstore.yml", ".github/workflows/ios.yml"]
+    paths: ["ios/fastlane/**", "ios/App/**", "ios/UITests/**", "testdata/demo/**", "tools/storeart/**",
+            ".github/workflows/appstore.yml", ".github/workflows/ios.yml"]
 concurrency: { group: appstore, cancel-in-progress: true }   # the newest listing wins
 permissions: { contents: read }
 jobs:
   replica:
     strategy: { matrix: { appearance: [light, dark] } }
     uses: ./.github/workflows/ios.yml
-    with: { upload: false, device: "iPhone 17 Pro Max", appearance: "${{ matrix.appearance }}" }
+    with:
+      upload: false
+      device: iPhone 17 Pro Max
+      appearance: ${{ matrix.appearance }}
+      record: ${{ matrix.appearance == 'light' }}   # the App Preview
     secrets: inherit
   listing:
     needs: replica
@@ -25,18 +32,36 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with: { pattern: replica-screens-*, path: "${{ runner.temp }}/screens" }
-      - name: Screenshots for every localization
+      - name: Noto Sans HK (notofonts/noto-cjk, pinned)
+        run: |
+          F="$RUNNER_TEMP/fonts"; mkdir -p "$F"
+          for w in Bold Regular; do
+            curl -sSfL -o "$F/NotoSansHK-$w.otf" "https://raw.githubusercontent.com/notofonts/noto-cjk/f8d157532fbfaeda587e826d4cd5b21a49186f7c/Sans/SubsetOTF/HK/NotoSansHK-$w.otf"
+          done
+          sha256sum -c <<EOF
+          4bce16fbed09278cbdfb4d57749500038cdda70737925a846e3f6c59327ab46e  $F/NotoSansHK-Bold.otf
+          8a43afea92bb58dfd9027bd7ac6f5b0b2662e2ffb3e7c1edc02c62b2b21924f1  $F/NotoSansHK-Regular.otf
+          EOF
+      - name: Screenshots and App Preview for every localization (tools/storeart)
         run: |
           S="$RUNNER_TEMP/screens"; ls -R "$S"
-          pick() { f=$(find "$S/replica-screens-$1" -name "*-$2.png" | head -1); [ -n "$f" ] || { echo "no $1 $2 screenshot" >&2; exit 1; }; echo "$f"; }
-          for l in zh-Hant en-GB en-US; do
-            mkdir -p "fastlane/screenshots/$l"
-            cp "$(pick light transcribed)" "fastlane/screenshots/$l/1-transcribed.png"
-            cp "$(pick dark transcribed)" "fastlane/screenshots/$l/2-transcribed-dark.png"
-            cp "$(pick light welcome)" "fastlane/screenshots/$l/3-welcome.png"
-            cp "$(pick light about)" "fastlane/screenshots/$l/4-about.png"
-          done
-          python3 -c "import struct,sys,glob;[print(f,struct.unpack('>II',open(f,'rb').read()[16:24])) for f in sorted(glob.glob('fastlane/screenshots/zh-Hant/*.png'))]"
+          sudo apt-get install -y -qq ffmpeg > /dev/null
+          cargo build -q --release --locked --manifest-path ../tools/storeart/Cargo.toml
+          ART=../tools/storeart/target/release/storeart
+          $ART stills --light "$S/replica-screens-light" --dark "$S/replica-screens-dark" --fonts "$RUNNER_TEMP/fonts" --out fastlane/screenshots
+          REC=$(find "$S/replica-screens-light" -name demo.mov | head -1); MARKS=$(find "$S/replica-screens-light" -name demo-marks.txt | head -1)
+          [ -n "$REC" ] && [ -n "$MARKS" ] || { echo "no demo recording" >&2; exit 1; }
+          cat "$MARKS"
+          $ART preview --recording "$REC" --marks "$MARKS" --audio ../testdata/demo/demo-16k.wav --fonts "$RUNNER_TEMP/fonts" --out fastlane/previews
+          python3 -c "import struct,glob;[print(f,struct.unpack('>IIBB',open(f,'rb').read()[16:26])) for f in sorted(glob.glob('fastlane/screenshots/*/*.png'))]"
+          ffprobe -v error -show_entries format=duration:stream=codec_name,profile,width,height,r_frame_rate,channels,sample_rate -of compact fastlane/previews/zh-Hant/*.mp4
+      - name: Keep the store art
+        uses: actions/upload-artifact@v4
+        with:
+          name: store-art
+          path: |
+            ios/fastlane/screenshots
+            ios/fastlane/previews
       - name: Load the listing (no review submission)
         env:
           ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
