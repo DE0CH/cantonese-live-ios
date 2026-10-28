@@ -22,6 +22,7 @@ struct ContentView: View {
                 }
             }
             .navigationTitle("廣東話字幕")
+            .navigationBarTitleDisplayMode(.inline)   // one row: 關於, the title and 清除 line up
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     Button("關於", systemImage: "info.circle") { showLicences = true }
