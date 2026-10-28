@@ -61,6 +61,8 @@ targets:
         # The model needs about 2.4 GB of memory: only iPhones with 8 GB (iPhone 15 Pro and later) get the app, so no
         # phone gets one it can't run (Deyao, 2026-10-28).
         UIRequiredDeviceCapabilities: [iphone-performance-gaming-tier]
+        # That capability makes iOS treat the app as a game and switch Game Mode on while it is open; it isn't one.
+        GCSupportsGameMode: false
         UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
         LSRequiresIPhoneOS: true
   CantoneseUITests:
