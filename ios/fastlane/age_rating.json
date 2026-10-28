@@ -20,5 +20,6 @@
   "messagingAndChat": false,
   "parentalControls": false,
   "unrestrictedWebAccess": false,
-  "userGeneratedContent": false
+  "userGeneratedContent": false,
+  "socialMedia": false
 }
