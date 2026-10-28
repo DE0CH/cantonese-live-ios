@@ -28,7 +28,7 @@ jobs:
       - name: Screenshots for every localization
         run: |
           S="$RUNNER_TEMP/screens"; ls -R "$S"
-          pick() { ls "$S/replica-screens-$1/"*"-$2.png" | head -1; }
+          pick() { f=$(find "$S/replica-screens-$1" -name "*-$2.png" | head -1); [ -n "$f" ] || { echo "no $1 $2 screenshot" >&2; exit 1; }; echo "$f"; }
           for l in zh-Hant en-GB en-US; do
             mkdir -p "fastlane/screenshots/$l"
             cp "$(pick light transcribed)" "fastlane/screenshots/$l/1-transcribed.png"
