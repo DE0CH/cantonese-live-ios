@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
   push:
     branches: [main]
-    paths: ["ios/fastlane/**", "ios/App/**", "ios/UITests/**", ".github/workflows/appstore.yml"]
+    paths: ["ios/fastlane/**", "ios/App/**", "ios/UITests/**", ".github/workflows/appstore.yml", ".github/workflows/ios.yml"]
 concurrency: { group: appstore, cancel-in-progress: true }   # the newest listing wins
 permissions: { contents: read }
 jobs:
