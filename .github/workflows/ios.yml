@@ -68,6 +68,8 @@ jobs:
           " "$DEVICE")
           [ -n "$UDID" ] || { echo "no $DEVICE simulator"; exit 1; }
           xcrun simctl boot "$UDID" 2>/dev/null || true
+          # Wait for a full boot: testing a half-booted simulator can leave XCTest "waiting for workers to materialize".
+          xcrun simctl bootstatus "$UDID" -b > /dev/null
           xcrun simctl ui "$UDID" appearance "$APPEARANCE"
           # App Store screenshots: a clean status bar (9:41, full signal and battery).
           xcrun simctl status_bar "$UDID" override --time 9:41 --dataNetwork wifi --wifiBars 3 --cellularBars 4 --batteryState charged --batteryLevel 100 || true
@@ -77,6 +79,7 @@ jobs:
           xcodebuild test -project Cantonese.xcodeproj -scheme Cantonese -configuration Release -destination "id=$UDID" \
             -resultBundlePath "$RUNNER_TEMP/ui.xcresult" -skipPackagePluginValidation -skipMacroValidation \
             -test-timeouts-enabled YES -maximum-test-execution-time-allowance 900 \
+            ONLY_ACTIVE_ARCH=YES ARCHS=arm64 \
             CODE_SIGN_IDENTITY=- CODE_SIGNING_REQUIRED=NO > "$RUNNER_TEMP/test.log" 2>&1 || true
           kill $WATCHDOG 2>/dev/null || true
           tail -25 "$RUNNER_TEMP/test.log"
