@@ -284,14 +284,6 @@ final class Worker: @unchecked Sendable {
         #else
         let model = try await Qwen3ASRModel.fromPretrained(
             modelId: "aufklarer/Qwen3-ASR-1.7B-MLX-5bit", cacheDir: dir.appendingPathComponent("asr"), offlineMode: true)
-        let asr: ([Float]) throws -> String = { audio in
-            var options = Qwen3DecodingOptions()
-            options.maxTokens = 200
-            return try model.transcribeThrowing(audio: audio, sampleRate: 16000, options: options)
-        }
-        #else
-        let model = try await Qwen3ASRModel.fromPretrained(
-            modelId: "aufklarer/Qwen3-ASR-1.7B-MLX-5bit", cacheDir: dir.appendingPathComponent("asr"), offlineMode: true)
         let asr: ASR = { audio, start, onText in
             var options = Qwen3DecodingOptions()
             options.maxTokens = 200
