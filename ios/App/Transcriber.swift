@@ -1,4 +1,3 @@
-import AudioCommon
 import AVFoundation
 import Foundation
 import OpenCC
@@ -7,9 +6,9 @@ import Qwen3ASR
 import SpeechVAD
 import UIKit
 
-/// Transcribes on the phone: Qwen3-ASR 0.6B (int8 CoreML, aufklarer/Qwen3-ASR-CoreML) on the Neural Engine and CPU,
-/// never the GPU, through speech-swift's MLX-free CoreML path, so it also keeps going with the screen locked. Nothing
-/// leaves the phone. The screen stays awake while listening.
+/// Transcribes on the phone: Qwen3-ASR 1.7B (5-bit, aufklarer/Qwen3-ASR-1.7B-MLX-5bit) on the GPU through MLX, via
+/// speech-swift. Nothing leaves the phone. iOS allows no GPU work in the background, so it works with the app on
+/// screen: the screen stays awake while listening, and leaving the app stops it.
 ///
 /// The mic's 16 kHz audio goes through Silero VAD (CoreML). Speech is cut into segments at pauses (or at 10 s); while a
 /// segment is still being spoken it is transcribed again every so often as pending text, and when it ends it is
@@ -30,8 +29,6 @@ final class Transcriber: ObservableObject {
         switch state { case .loading, .listening: return true; default: return false }
     }
 
-
-
     private var engine: AVAudioEngine?
     private var sessionObservers: [NSObjectProtocol] = []
     private var filePlayback: Task<Void, Never>?
@@ -40,6 +37,14 @@ final class Transcriber: ObservableObject {
     private let target = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 16000, channels: 1, interleaved: false)!
     /// UI tests stream the bundled clip instead of the microphone (the simulator has no real mic).
     private let testAudio = ProcessInfo.processInfo.environment["CANTONESE_TEST_AUDIO"] == "1"
+
+    init() {
+        // The GPU is off limits in the background: leaving the app (or locking the phone) stops listening.
+        NotificationCenter.default.addObserver(forName: UIApplication.didEnterBackgroundNotification, object: nil,
+                                               queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.stop() }
+        }
+    }
 
     func start() {
         guard !isRunning else { return }
@@ -235,26 +240,19 @@ final class Worker: @unchecked Sendable {
             throw CocoaError(.fileNoSuchFile)
         }
         #if targetEnvironment(simulator)
-        // On the simulator CoreML runs the model on the CPU at minutes per line, so the UI tests run everything but the
-        // model: this stand-in answers each segment of the bundled clip with what the model says for it (in its
-        // Simplified output, so OpenCC still runs). The real model is heard on a Mac by the model-check workflow.
+        // The simulator has no Metal for MLX, so the UI tests run everything but the model: this stand-in answers each
+        // segment of the bundled clip with what the model says for it (in its Simplified output, so OpenCC still runs).
+        // The real model is heard on a Mac by the model-check workflow.
         let lines = ["我哋今日去咗饮茶，啲虾饺好好食。", "佢话听日会再嚟。"]
         var said = 0
         let asr: ([Float]) throws -> String = { _ in defer { said += 1 }; return lines[min(said, lines.count - 1)] }
         #else
-        // Neural Engine and CPU only: no GPU, so it runs with the screen locked too.
-        let asrDir = dir.appendingPathComponent("asr")
-        let model = CoreMLASRModel(
-            encoder: try CoreMLASREncoder.load(from: asrDir, computeUnits: .cpuAndNeuralEngine),
-            decoder: try CoreMLTextDecoder.load(from: asrDir, computeUnits: .cpuAndNeuralEngine))
-        let tokenizer = Qwen3Tokenizer()
-        try tokenizer.load(from: dir.appendingPathComponent("tokenizer/vocab.json"))
+        let model = try await Qwen3ASRModel.fromPretrained(
+            modelId: "aufklarer/Qwen3-ASR-1.7B-MLX-5bit", cacheDir: dir.appendingPathComponent("asr"), offlineMode: true)
         let asr: ([Float]) throws -> String = { audio in
-            // With no tokenizer of its own the model answers with token ids ("151704 105043 …").
-            let ids = try model.transcribeWithoutMLX(audio: audio, sampleRate: 16000, language: nil, maxTokens: 200)
-                .split(separator: " ").compactMap { Int($0) }
-            let text = tokenizer.decode(tokens: ids)
-            return text.range(of: "<asr_text>").map { String(text[$0.upperBound...]) } ?? text
+            var options = Qwen3DecodingOptions()
+            options.maxTokens = 200
+            return try model.transcribeThrowing(audio: audio, sampleRate: 16000, options: options)
         }
         #endif
         let vad = try await SileroVADModel.fromPretrained(engine: .coreml, cacheDir: dir.appendingPathComponent("vad"),

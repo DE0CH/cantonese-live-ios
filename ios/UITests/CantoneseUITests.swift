@@ -1,8 +1,8 @@
 import XCTest
 
 /// The phone replica: walks every flow on the simulator, streaming the bundled Cantonese clip instead of the mic. The
-/// simulator runs CoreML on the CPU, too slow for the model, so a stand-in answers for it (Transcriber.swift); VAD,
-/// segments, OpenCC and the UI are real.
+/// simulator can't run MLX, so a stand-in answers for the model (Transcriber.swift); VAD, segments, OpenCC and the UI
+/// are real.
 final class CantoneseUITests: XCTestCase {
     func testEveryFlow() throws {
         let app = XCUIApplication()

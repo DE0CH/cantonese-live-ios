@@ -1,13 +1,12 @@
-# Runs the app's model (aufklarer/Qwen3-ASR-CoreML, Qwen3-ASR 0.6B int8 on CoreML) on a macOS runner with speech-swift's
-# own CLI at the app's pinned revision: transcribes the test clip and prints the text and timing. The runner is a VM
-# with no Neural Engine, so CoreML runs it on the CPU: this checks the words, not the phone's speed. The simulator UI
-# test uses a stand-in for the model, so this is where CI hears it.
+# Runs the app's model (aufklarer/Qwen3-ASR-1.7B-MLX-5bit, Qwen3-ASR 1.7B on MLX) on a macOS runner with speech-swift's
+# own CLI at the app's pinned revision: transcribes the test clip and prints the text and timing. The iPhone simulator
+# can't run MLX (no Metal), so this is where CI hears the model.
 name: model-check
 on:
   workflow_dispatch:
   push:
     branches: [main]
-    paths: ["ios/project.yml", "testdata/**", ".github/workflows/model-check.yml"]
+    paths: ["ios/project.yml", "ios/fetch-model.sh", "testdata/**", ".github/workflows/model-check.yml"]
 permissions: { contents: read }
 jobs:
   check:
@@ -27,6 +26,6 @@ jobs:
         run: |
           cd "$RUNNER_TEMP/ss"
           BIN=.build/release/audio
-          "$BIN" transcribe "$GITHUB_WORKSPACE/testdata/cantonese-16k.wav" --engine qwen3-coreml-full 2>&1 | tail -15
-          time "$BIN" transcribe "$GITHUB_WORKSPACE/testdata/cantonese-16k.wav" --engine qwen3-coreml-full 2>&1 | tail -15 | tee out.txt
+          "$BIN" transcribe "$GITHUB_WORKSPACE/testdata/cantonese-16k.wav" --engine qwen3 -m aufklarer/Qwen3-ASR-1.7B-MLX-5bit 2>&1 | tail -15
+          time "$BIN" transcribe "$GITHUB_WORKSPACE/testdata/cantonese-16k.wav" --engine qwen3 -m aufklarer/Qwen3-ASR-1.7B-MLX-5bit 2>&1 | tail -15 | tee out.txt
           grep -q "我哋" out.txt

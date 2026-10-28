@@ -1,5 +1,5 @@
 # XcodeGen spec (CI runs `xcodegen generate`; the .xcodeproj is not committed). The app transcribes on the phone
-# (Qwen3-ASR 0.6B on the Neural Engine through CoreML, shipped inside the app: `./fetch-model.sh` puts it in Model/
+# (Qwen3-ASR 1.7B on the GPU through MLX, shipped inside the app: `./fetch-model.sh` puts it in Model/
 # first), so it has no server and no secrets.
 name: Cantonese
 options:
@@ -34,8 +34,6 @@ targets:
         buildPhase: resources
     dependencies:
       - package: SpeechSwift
-        product: AudioCommon
-      - package: SpeechSwift
         product: Qwen3ASR
       - package: SpeechSwift
         product: SpeechVAD
@@ -58,7 +56,6 @@ targets:
         CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
         ITSAppUsesNonExemptEncryption: false
         NSMicrophoneUsageDescription: 用咪收音，喺部手機度即時轉做廣東話字幕。
-        UIBackgroundModes: [audio]
         UILaunchScreen: {}
         UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
         LSRequiresIPhoneOS: true
