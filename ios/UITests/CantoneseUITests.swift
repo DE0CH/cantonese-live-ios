@@ -39,6 +39,18 @@ final class CantoneseUITests: XCTestCase {
         XCTAssertTrue(!cleared.exists || cleared.label.trimmingCharacters(in: .whitespaces).isEmpty, "clear left text behind")
         shot(app, "cleared")
 
+        // 關於: every licence the app ships with opens with its text.
+        app.buttons["about"].tap()
+        let qwen = app.buttons["licence-Qwen3-ASR 1.7B"]
+        XCTAssertTrue(qwen.waitForExistence(timeout: 10), "about sheet didn't open")
+        shot(app, "about")
+        qwen.tap()
+        XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label CONTAINS 'Apache License'")).firstMatch
+                        .waitForExistence(timeout: 10), "licence text missing")
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        app.buttons["done"].tap()
+        XCTAssertTrue(app.buttons["mic"].waitForExistence(timeout: 10), "about sheet didn't close")
+
         // A second start reuses the loaded models: listening at once.
         app.buttons["mic"].tap()
         XCTAssertTrue(app.staticTexts["聽緊"].waitForExistence(timeout: 60), "second start was slow (\(status(app)))")

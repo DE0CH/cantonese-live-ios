@@ -8,6 +8,8 @@ on:
   workflow_dispatch:
     inputs:
       upload: { description: "Upload to TestFlight", type: boolean, default: true }
+      device: { description: "Simulator (iPhone 17 Pro Max gives the 6.9-inch App Store screenshots)", type: string, default: "iPhone 17" }
+      appearance: { description: "Simulator appearance", type: choice, options: [light, dark], default: light }
   push:
     branches: [main]
     paths: ["ios/**", "testdata/**", ".github/workflows/ios.yml"]
@@ -42,9 +44,12 @@ jobs:
           xcodebuild -downloadComponent MetalToolchain > /dev/null 2>&1 || true   # MLX's shaders
           sed -i '' "s/BUILD_NUMBER: \"1\"/BUILD_NUMBER: \"$BUILD_NUMBER\"/" project.yml
           xcodegen generate --quiet
-      - name: Phone replica (iPhone 17 simulator, every flow, on-device model)
+      - name: Phone replica (simulator, every flow)
         id: replica
         timeout-minutes: 35
+        env:
+          DEVICE: ${{ inputs.device || 'iPhone 17' }}
+          APPEARANCE: ${{ inputs.appearance || 'light' }}
         run: |
           UDID=$(xcrun simctl list devices available -j | python3 -c "
           import json,sys,re
@@ -52,10 +57,13 @@ jobs:
           rts=sorted((k for k in d if 'iOS' in k), key=lambda k:[int(x) for x in re.findall(r'\d+',k)])
           for rt in reversed(rts):
               for dev in d[rt]:
-                  if dev['name']=='iPhone 17': print(dev['udid']); sys.exit()
-          ")
-          [ -n "$UDID" ] || { echo "no iPhone 17 simulator"; exit 1; }
+                  if dev['name']==sys.argv[1]: print(dev['udid']); sys.exit()
+          " "$DEVICE")
+          [ -n "$UDID" ] || { echo "no $DEVICE simulator"; exit 1; }
           xcrun simctl boot "$UDID" 2>/dev/null || true
+          xcrun simctl ui "$UDID" appearance "$APPEARANCE"
+          # App Store screenshots: a clean status bar (9:41, full signal and battery).
+          xcrun simctl status_bar "$UDID" override --time 9:41 --dataNetwork wifi --wifiBars 3 --cellularBars 4 --batteryState charged --batteryLevel 100 || true
           xcodebuild test -project Cantonese.xcodeproj -scheme Cantonese -configuration Release -destination "id=$UDID" \
             -resultBundlePath "$RUNNER_TEMP/ui.xcresult" -skipPackagePluginValidation -skipMacroValidation CODE_SIGN_IDENTITY=- CODE_SIGNING_REQUIRED=NO > "$RUNNER_TEMP/test.log" 2>&1 || true
           grep -E "error:|\*\* TEST|Test Case .*(passed|failed)|TRANSCRIPT|XCTAssert" "$RUNNER_TEMP/test.log" | head -40 || true

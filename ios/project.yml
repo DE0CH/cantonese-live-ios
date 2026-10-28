@@ -27,6 +27,9 @@ targets:
     platform: iOS
     sources:
       - path: App
+        excludes: ["Licences/**"]
+      - path: App/Licences
+        buildPhase: resources
       - path: ../testdata/cantonese-16k.wav
         buildPhase: resources
       - path: Model
@@ -57,6 +60,9 @@ targets:
         ITSAppUsesNonExemptEncryption: false
         NSMicrophoneUsageDescription: 用咪收音，喺部手機度即時轉做廣東話字幕。
         UILaunchScreen: {}
+        # The model needs about 2.4 GB of memory: only iPhones with 8 GB (iPhone 15 Pro and later) get the app, so no
+        # phone gets one it can't run (Deyao, 2026-10-28).
+        UIRequiredDeviceCapabilities: [iphone-performance-gaming-tier]
         UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
         LSRequiresIPhoneOS: true
   CantoneseUITests:

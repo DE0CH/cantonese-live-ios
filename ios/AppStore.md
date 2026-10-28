@@ -79,15 +79,20 @@ microphone button and speak Cantonese (or play a Cantonese video near the phone)
 pauses, the line being spoken refreshes about every 1.5 s. Loading the model takes a few seconds on the first tap.
 iOS does not allow GPU work in the background, so leaving the app stops listening. No account is needed.
 
+## Devices
+
+Only iPhones with 8 GB of memory: `UIRequiredDeviceCapabilities` `iphone-performance-gaming-tier` (iPhone 15 Pro and
+later, every iPhone 16 and 17). The model needs about 2.4 GB, and an app that may run out of memory on older phones is
+not offered there at all (Deyao, 2026-10-28). Apple does not let a later update drop a required capability's users the
+other way round, so this floor can only be lowered, not raised, after release.
+
 ## Screenshots
 
-6.9-inch iPhone (1320 × 2868) is the one size required: empty screen, listening with a pending line, finished
-captions, dark mode. The `ios` workflow's UI test already takes these shots while streaming the bundled clip, but on an
-iPhone 17 (1206 × 2622); one more run on an iPhone 17 Pro Max simulator gives the required size.
+6.9-inch iPhone (1320 × 2868), the one size required, from the `ios` workflow run by hand with `device` = iPhone 17
+Pro Max (light and dark, `upload` off): the UI test's shots while streaming the bundled clip (empty screen, listening,
+finished captions, 關於).
 
-## Open before submitting
+## Licences
 
-- The model needs about 2.4 GB of memory. Older iPhones may run out: `UIRequiredDeviceCapabilities`
-  `iphone-performance-gaming-tier` would limit the app to iPhone 15 Pro and later.
-- The app redistributes the Qwen3-ASR weights (Apache 2.0) and Silero VAD (MIT): an acknowledgements screen with
-  their licence texts.
+The 關於 sheet (ⓘ, top left) lists every open-source part shipped (Qwen3-ASR and speech-swift, swift-transformers,
+OpenCC: Apache 2.0; Silero VAD, MLX, MLX Swift, SwiftyOpenCC: MIT) with its licence text (`ios/App/Licences/`).

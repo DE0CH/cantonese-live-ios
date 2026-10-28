@@ -23,13 +23,22 @@ struct ContentView: View {
             }
             .navigationTitle("粵語字幕")
             .toolbar {
-                Button("清除", systemImage: "trash") { t.clear() }
-                    .disabled(t.lines.isEmpty)
-                    .accessibilityIdentifier("clear")
+                ToolbarItem(placement: .topBarLeading) {
+                    Button("關於", systemImage: "info.circle") { showLicences = true }
+                        .accessibilityIdentifier("about")
+                }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("清除", systemImage: "trash") { t.clear() }
+                        .disabled(t.lines.isEmpty)
+                        .accessibilityIdentifier("clear")
+                }
             }
             .bottomBar { controls }
+            .sheet(isPresented: $showLicences) { LicencesView() }
         }
     }
+
+    @State private var showLicences = false
 
     /// Finished lines in the primary colour, the line still being spoken in grey.
     private var transcript: Text {
