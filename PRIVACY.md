@@ -8,7 +8,7 @@ The iOS app collects nothing.
   cleared or the app is closed; it is not stored.
 - The microphone is used only while listening is switched on in the app.
 
-Questions: open an issue at https://github.com/DE0CH/cantonese-live/issues.
+Questions: open an issue at https://github.com/DE0CH/cantonese-live-ios/issues.
 
 ---
 

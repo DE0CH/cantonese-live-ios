@@ -41,8 +41,10 @@ jobs:
           du -sh Model/*
       - name: Xcode, xcodegen
         env:
+          # TestFlight already has builds up to 31 from DE0CH/cantonese-live, where this app started.
           BUILD_NUMBER: ${{ github.run_number }}
         run: |
+          BUILD_NUMBER=$((BUILD_NUMBER + 100))
           XCODE=$(ls -d /Applications/Xcode_*.app | grep -v -i beta | sort -V | tail -1)
           echo "Using $XCODE"; sudo xcode-select -s "$XCODE"; xcodebuild -version
           brew list xcodegen >/dev/null 2>&1 || brew install xcodegen

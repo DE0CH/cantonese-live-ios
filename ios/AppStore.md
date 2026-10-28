@@ -16,8 +16,8 @@ App record 6826497735, bundle `dev.de0ch.cantonese`, version 1.0, the newest Tes
 | Availability | Every territory except China mainland (an app sold there needs an MIIT app filing) |
 | Age rating | 4+ (every questionnaire answer "None"/"No") |
 | Copyright | 2026 Deyao Chen |
-| Privacy policy URL | https://github.com/DE0CH/cantonese-live/blob/main/PRIVACY.md |
-| Support URL | https://github.com/DE0CH/cantonese-live/issues |
+| Privacy policy URL | https://github.com/DE0CH/cantonese-live-ios/blob/main/PRIVACY.md |
+| Support URL | https://github.com/DE0CH/cantonese-live-ios/issues |
 | App privacy | Data Not Collected |
 | Encryption | None (`ITSAppUsesNonExemptEncryption` = false) |
 | Content rights | Contains third-party content: yes (Qwen3-ASR, Apache 2.0; Silero VAD, MIT) |
