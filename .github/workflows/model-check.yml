@@ -16,8 +16,9 @@ jobs:
       - uses: actions/checkout@v4
       - name: speech-swift CLI at the app's revision
         run: |
-          REV=$(awk '/speech-swift/{f=1} f&&/revision:/{print $2; exit}' ios/project.yml)
-          git clone -q https://github.com/soniqo/speech-swift "$RUNNER_TEMP/ss" && git -C "$RUNNER_TEMP/ss" checkout -q "$REV"
+          URL=$(awk '/SpeechSwift:/{f=1} f&&/url:/{print $2; exit}' ios/project.yml)
+          REV=$(awk '/SpeechSwift:/{f=1} f&&/revision:/{print $2; exit}' ios/project.yml)
+          git clone -q "$URL" "$RUNNER_TEMP/ss" && git -C "$RUNNER_TEMP/ss" checkout -q "$REV"
           cd "$RUNNER_TEMP/ss"
           xcodebuild -downloadComponent MetalToolchain > /dev/null 2>&1 || true
           make build 2>&1 | tail -3

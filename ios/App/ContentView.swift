@@ -44,11 +44,11 @@ struct ContentView: View {
     @State private var showWelcome = false
     @AppStorage("welcomed") private var welcomed = false
 
-    /// Finished lines in the primary colour, the line still being spoken in grey.
+    /// Settled text in the primary colour, the tail the model may still revise in grey.
     private var transcript: Text {
         t.lines.enumerated().reduce(Text("")) { text, e in
-            text + Text((e.offset > 0 ? "\n" : "") + e.element.text)
-                .foregroundStyle(e.element.final ? Color.primary : Color.secondary)
+            text + Text((e.offset > 0 ? "\n" : "") + e.element.settled).foregroundStyle(Color.primary)
+                + Text(e.element.tail).foregroundStyle(Color.secondary)
         }
     }
 
