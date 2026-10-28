@@ -27,7 +27,7 @@ defaults:
 jobs:
   build:
     runs-on: macos-26
-    timeout-minutes: 60
+    timeout-minutes: 75
     steps:
       - uses: actions/checkout@v4
       - name: Models the app ships with (cached by the pinned revisions in fetch-model.sh)
@@ -53,7 +53,7 @@ jobs:
           xcodegen generate --quiet
       - name: Phone replica (simulator, every flow)
         id: replica
-        timeout-minutes: 35
+        timeout-minutes: 40
         env:
           DEVICE: ${{ inputs.device || 'iPhone 17' }}
           APPEARANCE: ${{ inputs.appearance || 'light' }}
@@ -71,8 +71,15 @@ jobs:
           xcrun simctl ui "$UDID" appearance "$APPEARANCE"
           # App Store screenshots: a clean status bar (9:41, full signal and battery).
           xcrun simctl status_bar "$UDID" override --time 9:41 --dataNetwork wifi --wifiBars 3 --cellularBars 4 --batteryState charged --batteryLevel 100 || true
+          # A stuck test fails on its own (XCTest's 15 min allowance), and a stuck xcodebuild is stopped before the step's
+          # timeout, so the log, the app's lines and the screenshots below are always printed.
+          ( sleep 1800; echo "watchdog: stopping xcodebuild" >> "$RUNNER_TEMP/test.log"; pkill -INT xcodebuild ) & WATCHDOG=$!
           xcodebuild test -project Cantonese.xcodeproj -scheme Cantonese -configuration Release -destination "id=$UDID" \
-            -resultBundlePath "$RUNNER_TEMP/ui.xcresult" -skipPackagePluginValidation -skipMacroValidation CODE_SIGN_IDENTITY=- CODE_SIGNING_REQUIRED=NO > "$RUNNER_TEMP/test.log" 2>&1 || true
+            -resultBundlePath "$RUNNER_TEMP/ui.xcresult" -skipPackagePluginValidation -skipMacroValidation \
+            -test-timeouts-enabled YES -maximum-test-execution-time-allowance 900 \
+            CODE_SIGN_IDENTITY=- CODE_SIGNING_REQUIRED=NO > "$RUNNER_TEMP/test.log" 2>&1 || true
+          kill $WATCHDOG 2>/dev/null || true
+          tail -25 "$RUNNER_TEMP/test.log"
           grep -E "error:|\*\* TEST|Test Case .*(passed|failed)|TRANSCRIPT|XCTAssert" "$RUNNER_TEMP/test.log" | head -40 || true
           grep -A12 -E "The following build commands failed|Testing failed:" "$RUNNER_TEMP/test.log" | head -60 || true
           xcrun simctl spawn "$UDID" log show --last 90m --style compact \
