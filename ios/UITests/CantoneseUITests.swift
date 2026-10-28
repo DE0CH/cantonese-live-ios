@@ -10,14 +10,14 @@ final class CantoneseUITests: XCTestCase {
         app.launch()
         shot(app, "launch")
 
-        app.buttons["clear"].tap()
+        XCTAssertFalse(app.buttons["clear"].isEnabled, "clear is on with nothing to clear")
         app.buttons["mic"].tap()
         let ready = Date().addingTimeInterval(3 * 60)
-        while Date() < ready, status(app) != "● 聽緊" {
+        while Date() < ready, status(app) != "聽緊" {
             if status(app).hasPrefix("用唔到") { break }
             Thread.sleep(forTimeInterval: 1)
         }
-        XCTAssertEqual(status(app), "● 聽緊", "never started listening (\(status(app)))")
+        XCTAssertEqual(status(app), "聽緊", "never started listening (\(status(app)))")
         shot(app, "listening")
 
         // The 7.5 s clip and a second of silence end one segment; its transcription lands as a committed line.
@@ -41,7 +41,7 @@ final class CantoneseUITests: XCTestCase {
 
         // A second start reuses the loaded models: listening at once.
         app.buttons["mic"].tap()
-        XCTAssertTrue(app.staticTexts["● 聽緊"].waitForExistence(timeout: 60), "second start was slow (\(status(app)))")
+        XCTAssertTrue(app.staticTexts["聽緊"].waitForExistence(timeout: 60), "second start was slow (\(status(app)))")
         app.buttons["mic"].tap()
     }
 

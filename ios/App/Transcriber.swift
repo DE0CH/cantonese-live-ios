@@ -12,17 +12,14 @@ import UIKit
 ///
 /// The mic's 16 kHz audio goes through Silero VAD (CoreML). Speech is cut into segments at pauses (or at 10 s); while a
 /// segment is still being spoken it is transcribed again every so often as pending text, and when it ends it is
-/// transcribed once more and committed as its own line. The model works on one segment at a time on its own queue;
-/// a finished segment always goes before a pending refresh.
+/// transcribed once more and becomes a finished line. The model works on one segment at a time on its own queue; a
+/// finished segment always goes before a pending refresh.
 @MainActor
 final class Transcriber: ObservableObject {
     enum State: Equatable { case idle, loading(String), listening, failed(String) }
 
-    /// One segment's text: commit is final, pending may still change.
-    struct Part: Identifiable { let id: Int; let commit: String; let pending: String }
-
-    @Published var committed = ""
-    @Published var parts: [Part] = []
+    /// What has been said since the last clear, one line per segment, oldest first.
+    @Published var lines: [Worker.Line] = []
     @Published var state: State = .idle
 
     var isRunning: Bool {
@@ -53,8 +50,8 @@ final class Transcriber: ObservableObject {
             do {
                 let worker = try await Worker.shared()
                 try Task.checkCancellation()
-                worker.onUpdate = { [weak self] parts, finished in
-                    Task { @MainActor in self?.show(parts, finished: finished) }
+                worker.onUpdate = { [weak self] lines in
+                    Task { @MainActor in self?.lines = lines }
                 }
                 worker.begin(partials: !testAudio)
                 self.worker = worker
@@ -62,6 +59,10 @@ final class Transcriber: ObservableObject {
                 return
             } catch {
                 fail("用唔到模型：\(error.localizedDescription)")
+                return
+            }
+            if !testAudio, !(await AVAudioApplication.requestRecordPermission()) {
+                fail("未有權限用咪：去「設定」>「粵語字幕」開返")
                 return
             }
             do {
@@ -83,15 +84,8 @@ final class Transcriber: ObservableObject {
     }
 
     func clear() {
-        committed = ""
-        parts = []
+        lines.removeAll { $0.final }
         worker?.clear()
-    }
-
-    /// Finished segments become plain text; the rest show as parts (commit + pending).
-    private func show(_ segments: [Worker.Shown], finished: String) {
-        committed += finished
-        parts = segments.map { Part(id: $0.id, commit: $0.commit, pending: $0.pending) }
     }
 
     private func fail(_ message: String) {
@@ -188,13 +182,16 @@ final class Transcriber: ObservableObject {
     }
 }
 
-/// The models and everything that touches them, on one serial queue.
+/// The models and everything that touches them. Audio state lives on audioQueue, the model runs on modelQueue.
 final class Worker: @unchecked Sendable {
     static let log = Logger(subsystem: "dev.de0ch.cantonese", category: "model")
-    struct Shown { let id: Int; let commit: String; let pending: String }
 
-    /// Segments shown on screen and the text that just finished.
-    var onUpdate: (([Shown], String) -> Void)?
+    /// One segment's text: final once the whole segment has been transcribed, pending (and may change) until then.
+    struct Line: Identifiable { let id: Int; var text: String; var final: Bool }
+    private struct Segment { let id: Int; var audio: [Float] }
+
+    /// Every line on screen, after each change.
+    var onUpdate: (([Line]) -> Void)?
 
     private let asr: ([Float]) throws -> String
     private let vad: SileroVADModel
@@ -203,18 +200,10 @@ final class Worker: @unchecked Sendable {
     private let modelQueue = DispatchQueue(label: "cantonese.model", qos: .userInitiated)
 
     // audioQueue state
-    private final class Segment {
-        let id: Int
-        var samples: [Float]
-        var ended = false
-        var transcribedCount = 0     // samples in the last pending transcription
-        var pending = ""
-        var final: String?
-        var discard = false          // cleared while still being transcribed
-        init(id: Int, samples: [Float]) { self.id = id; self.samples = samples }
-    }
-    private var segments: [Segment] = []
-    private var current: Segment?
+    private var lines: [Line] = []
+    private var current: Segment?        // being spoken
+    private var ended: [Segment] = []     // spoken, waiting for the model
+    private var lastPartial = 0           // samples of current at its last pending transcription
     private var vadBuffer: [Float] = []
     private var preRoll: [Float] = []
     private var silentChunks = 0
@@ -287,12 +276,12 @@ final class Worker: @unchecked Sendable {
         }
     }
 
-    /// Clear the screen: text of segments already spoken is dropped, the one being spoken carries on.
+    /// Clear the screen: everything already spoken goes, the segment being spoken carries on.
     func clear() {
         audioQueue.async { [self] in
-            for s in segments where s !== current { s.discard = true }
-            current?.pending = ""
-            settle()
+            ended = []
+            lines.removeAll { $0.id != current?.id }
+            onUpdate?(lines)
         }
     }
 
@@ -310,28 +299,30 @@ final class Worker: @unchecked Sendable {
     }
 
     private func step(_ c: [Float], prob: Float) {
-        if let s = current {
-            s.samples += c
+        if current != nil {
+            current!.audio += c
             silentChunks = prob < Self.stopProb ? silentChunks + 1 : 0
-            if silentChunks >= Self.endSilenceChunks || s.samples.count >= Self.maxSamples { endCurrent() }
+            if silentChunks >= Self.endSilenceChunks || current!.audio.count >= Self.maxSamples { endCurrent() }
         } else {
             preRoll += c
             if preRoll.count > Self.preRollSamples { preRoll.removeFirst(preRoll.count - Self.preRollSamples) }
             if prob >= Self.startProb {
                 Self.log.notice("segment \(self.nextId) starts (vad \(prob))")
-                let s = Segment(id: nextId, samples: preRoll)
+                current = Segment(id: nextId, audio: preRoll)
+                lines.append(Line(id: nextId, text: "", final: false))
                 nextId += 1
-                segments.append(s)
-                current = s
                 preRoll = []
                 silentChunks = 0
+                lastPartial = 0
             }
         }
     }
 
     private func endCurrent() {
-        if let s = current { Self.log.notice("segment \(s.id) ends: \(s.samples.count / 16) ms") }
-        current?.ended = true
+        if let s = current {
+            Self.log.notice("segment \(s.id) ends: \(s.audio.count / 16) ms")
+            ended.append(s)
+        }
         current = nil
         silentChunks = 0
         schedule()
@@ -340,20 +331,23 @@ final class Worker: @unchecked Sendable {
     /// Start the next transcription if the model is free: the oldest ended segment first, else a pending refresh.
     private func schedule() {
         guard !busy else { return }
-        let job: (Segment, [Float], Bool)
-        if let s = segments.first(where: { $0.ended && $0.final == nil }) {
-            job = (s, s.samples, true)
-        } else if partials, let s = current, s.samples.count - s.transcribedCount >= Self.partialEvery {
-            job = (s, s.samples, false)
+        let job: Segment, final: Bool
+        if !ended.isEmpty {
+            job = ended.removeFirst(); final = true
+        } else if partials, let s = current, s.audio.count - lastPartial >= Self.partialEvery {
+            job = s; final = false; lastPartial = s.audio.count
         } else { return }
         busy = true
         modelQueue.async { [self] in
-            let text = job.1.count < 4000 ? "" : transcribe(job.1)
+            let text = job.audio.count < 4000 ? "" : transcribe(job.audio)
             audioQueue.async { [self] in
                 busy = false
-                let (s, audio, isFinal) = job
-                if isFinal { s.final = text } else { s.pending = text; s.transcribedCount = audio.count }
-                settle()
+                // The line is gone if the screen was cleared meanwhile; a finished segment with no words leaves. One job
+                // runs at a time, so a segment's final always lands after its pending refreshes.
+                if let i = lines.firstIndex(where: { $0.id == job.id }) {
+                    if final && text.isEmpty { lines.remove(at: i) } else { lines[i] = Line(id: job.id, text: text, final: final) }
+                    onUpdate?(lines)
+                }
                 schedule()
             }
         }
@@ -369,22 +363,5 @@ final class Worker: @unchecked Sendable {
             Self.log.error("transcription failed after \(Int(Date().timeIntervalSince(t0) * 1000)) ms: \(error.localizedDescription, privacy: .public)")
             return ""
         }
-    }
-
-    /// Finished segments at the front leave the list as committed lines.
-    private func settle() {
-        var finished = ""
-        while let s = segments.first, let text = s.final {
-            if !text.isEmpty, !s.discard { finished += text + "\n" }
-            segments.removeFirst()
-        }
-        publish(finished: finished)
-    }
-
-    private func publish(finished: String) {
-        let shown = segments.filter { !$0.discard }.map {
-            Shown(id: $0.id, commit: $0.final.map { $0.isEmpty ? "" : $0 + "\n" } ?? "", pending: $0.final == nil ? $0.pending : "")
-        }
-        onUpdate?(shown, finished)
     }
 }

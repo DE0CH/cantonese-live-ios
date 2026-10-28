@@ -2,63 +2,88 @@ import SwiftUI
 
 struct ContentView: View {
     @EnvironmentObject var t: Transcriber
-    private let accent = Color(red: 0.76, green: 0.25, blue: 0.05)
 
     var body: some View {
-        VStack(spacing: 0) {
-            Text("粵語即時字幕").font(.headline)
-                .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, 16).padding(.vertical, 12)
-            Divider()
-            ScrollViewReader { proxy in
-                ScrollView {
-                    VStack(alignment: .leading) {
-                        if t.committed.isEmpty && t.parts.allSatisfy({ $0.commit.isEmpty && $0.pending.isEmpty }) {
-                            Text("撳「開始」，對住咪講廣東話，字幕會即時出現。全部喺部手機度轉，唔使上網。")
-                                .font(.body).foregroundStyle(.secondary)
-                        }
-                        t.parts.reduce(Text(t.committed)) { $0 + Text($1.commit) + Text($1.pending).foregroundColor(.secondary) }
-                            .font(.system(size: 26))
-                            .lineSpacing(8)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .textSelection(.enabled)
-                            .accessibilityIdentifier("transcript")
-                        Color.clear.frame(height: 1).id("end")
-                    }
-                    .padding(16)
-                }
-                .onChange(of: t.committed + t.parts.map { $0.commit + $0.pending }.joined()) { _, _ in
-                    withAnimation(.easeOut(duration: 0.15)) { proxy.scrollTo("end", anchor: .bottom) }
+        NavigationStack {
+            ScrollView {
+                transcript
+                    .font(.title2)
+                    .lineSpacing(6)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .textSelection(.enabled)
+                    .accessibilityIdentifier("transcript")
+                    .padding()
+            }
+            .defaultScrollAnchor(.bottom, for: .sizeChanges)   // follow new text
+            .overlay {
+                if t.lines.isEmpty {
+                    ContentUnavailableView("未有字幕", systemImage: "captions.bubble",
+                                           description: Text("撳個咪，講廣東話，字幕會即時出現。全部喺部手機度轉，唔使上網。"))
                 }
             }
-            VStack(spacing: 10) {
-                Text(statusText)
-                    .font(.footnote)
-                    .foregroundStyle(isError ? accent : .secondary)
-                    .accessibilityIdentifier("status")
-                HStack(spacing: 20) {
-                    Button("清除") { t.clear() }
-                        .foregroundStyle(.secondary)
-                        .accessibilityIdentifier("clear")
-                    Button(t.isRunning ? "停止" : "開始") { t.isRunning ? t.stop() : t.start() }
-                        .font(.headline)
-                        .frame(minWidth: 150).padding(.vertical, 14)
-                        .background(t.isRunning ? Color.primary : accent, in: Capsule())
-                        .foregroundStyle(t.isRunning ? Color(uiColor: .systemBackground) : .white)
-                        .accessibilityIdentifier("mic")
-                }
+            .navigationTitle("粵語字幕")
+            .toolbar {
+                Button("清除", systemImage: "trash") { t.clear() }
+                    .disabled(t.lines.isEmpty)
+                    .accessibilityIdentifier("clear")
             }
-            .padding(.vertical, 12)
+            .bottomBar { controls }
         }
     }
 
+    /// Finished lines in the primary colour, the line still being spoken in grey.
+    private var transcript: Text {
+        t.lines.enumerated().reduce(Text("")) { text, e in
+            text + Text((e.offset > 0 ? "\n" : "") + e.element.text)
+                .foregroundStyle(e.element.final ? Color.primary : Color.secondary)
+        }
+    }
+
+    private var controls: some View {
+        VStack(spacing: 8) {
+            Text(statusText)
+                .font(.footnote)
+                .foregroundStyle(isError ? Color.red : Color.secondary)
+                .accessibilityIdentifier("status")
+            Button { t.isRunning ? t.stop() : t.start() } label: {
+                Group {
+                    if isLoading { ProgressView().controlSize(.large).tint(.white) }
+                    else { Image(systemName: t.isRunning ? "stop.fill" : "mic.fill").font(.title) }
+                }
+                .frame(width: 64, height: 64)
+            }
+            .prominentGlass()
+            .buttonBorderShape(.circle)
+            .tint(t.isRunning ? .red : .accentColor)
+            .accessibilityLabel(isLoading ? "取消" : t.isRunning ? "停止" : "開始")
+            .accessibilityIdentifier("mic")
+            .sensoryFeedback(.impact, trigger: t.isRunning)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 12)
+    }
+
+    private var isLoading: Bool { if case .loading = t.state { return true } else { return false } }
     private var isError: Bool { if case .failed = t.state { return true } else { return false } }
     private var statusText: String {
         switch t.state {
         case .idle: return " "
         case .loading(let m): return m
-        case .listening: return "● 聽緊"
+        case .listening: return "聽緊"
         case .failed(let m): return m
         }
+    }
+}
+
+private extension View {
+    /// Liquid Glass on iOS 26 (a bar with the scroll edge effect, a glass button); the classic look below it.
+    @ViewBuilder func bottomBar(@ViewBuilder _ content: () -> some View) -> some View {
+        let bar = content()
+        if #available(iOS 26, *) { safeAreaBar(edge: .bottom) { bar } }
+        else { safeAreaInset(edge: .bottom) { bar.background(.bar) } }
+    }
+
+    @ViewBuilder func prominentGlass() -> some View {
+        if #available(iOS 26, *) { buttonStyle(.glassProminent) } else { buttonStyle(.borderedProminent) }
     }
 }
