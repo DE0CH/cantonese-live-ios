@@ -97,7 +97,7 @@ final class CantoneseUITests: XCTestCase {
         Thread.sleep(forTimeInterval: 3)
         let text = app.staticTexts["transcript"].label
         print("DEMO TRANSCRIPT: \(text)")
-        XCTAssertTrue(text.contains("Central") && text.contains("MTR"), "demo captions missing: \(text)")
+        XCTAssertTrue(text.contains("Central") && text.contains("proposal"), "demo captions missing: \(text)")
         app.buttons["mic"].tap()
     }
 
