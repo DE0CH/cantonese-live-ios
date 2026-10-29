@@ -2,7 +2,7 @@
 
 Features:
 • Live captions: the sentence being spoken shows in grey, then settles once it ends
-• Cantonese, English and Mandarin, even mixed in one sentence
+• Cantonese, English and Putonghua, even mixed in one sentence
 • Hong Kong Traditional Chinese characters
 • Runs entirely on your iPhone, no internet needed
 • No data collected: audio and text never leave the phone

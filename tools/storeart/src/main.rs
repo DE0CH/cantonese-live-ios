@@ -40,7 +40,7 @@ fn copy(locale: &str) -> [Copy; 3] {
         _ => [
             Copy { head: "Speak Cantonese, see captions", sub: "What people around you say, as live Hong Kong Chinese captions" },
             Copy {
-                head: "Cantonese, English, Mandarin",
+                head: "Cantonese, English, Putonghua",
                 sub: if recognised == "recognized" {
                     "All three recognized, even mixed in one sentence"
                 } else {
