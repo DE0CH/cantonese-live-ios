@@ -9,12 +9,8 @@ import UIKit
 /// speech-swift. Nothing leaves the phone. iOS allows no GPU work in the background, so it works with the app on
 /// screen: the screen stays awake while listening, and leaving the app stops it.
 ///
-/// The model runs all the time, with no speech detection in front of it, streaming the way offline models are usually
-/// streamed (LocalAgreement-2, as whisper_streaming does it): whenever it is free and 0.5 s more of the mic's 16 kHz
-/// audio has come in, the audio since the line began is transcribed again, continuing from the text the last two passes
-/// agreed on (only the rest is written, and shown token by token). What this pass and the last agree on is settled
-/// (black); the rest is the grey tail. When passes stop finding new words (a pause) the line ends; 30 s without one, the
-/// line is cut at its quietest 100 ms.
+/// The model runs all the time, with no speech detection in front of it, over a sliding window of the mic's 16 kHz
+/// audio (Worker): the window's words are timed by Qwen3-ForcedAligner 0.6B, and those well inside it turn black.
 @MainActor
 final class Transcriber: ObservableObject {
     enum State: Equatable { case idle, loading(String), listening, failed(String) }
@@ -22,8 +18,10 @@ final class Transcriber: ObservableObject {
     /// What has been said since the last clear, one line per segment, oldest first.
     @Published var lines: [Worker.Line] = []
     @Published var state: State = .idle
-    /// UI tests: the loop is stopped at a pass for a screenshot (Worker.holdAfter, from CANTONESE_HOLD).
+    /// UI tests: the loop is stopped at a run for a screenshot (Worker.holdAfter, from CANTONESE_HOLD).
     @Published var held = false
+    /// UI tests: the whole test clip has gone in and the loop has caught up.
+    @Published var played = false
 
     var isRunning: Bool {
         switch state { case .loading, .listening: return true; default: return false }
@@ -62,6 +60,9 @@ final class Transcriber: ObservableObject {
                 worker.onUpdate = { latest.send($0) }
                 worker.onHold = { [weak self] held in
                     Task { @MainActor in self?.held = held }
+                }
+                worker.onFail = { [weak self] message in
+                    Task { @MainActor in self?.fail(message) }
                 }
                 worker.begin()
                 self.worker = worker
@@ -194,43 +195,39 @@ final class Transcriber: ObservableObject {
         guard let clip = testClip, let worker else { fail("搵唔到測試錄音"); return }
         worker.holdAfter = clip.holdAfter
         worker.holdFor = 8
+        played = false
         Worker.log.notice("test audio starts")
-        filePlayback = Task { await worker.play(clip.samples, pace: true) }
+        filePlayback = Task { [weak self] in
+            await worker.play(clip.samples, pace: true)
+            if !Task.isCancelled { self?.played = true }
+        }
     }
 }
 
-/// A bundled 16 kHz mono clip the UI tests stream instead of the microphone, and for the simulator's stand-in model
-/// what the real model said: for the test clip, per line (testdata/cantonese-16k.json, from the model-check workflow);
-/// for the App Store demo, every pass the app's loop made over it with the real model on a Mac
-/// (testdata/demo/demo-16k.passes.json, from tools/demo-passes in the model-check workflow).
-struct TestClip {
-    struct Line: Decodable { let start: Double; let end: Double; let text: String }
-    struct Pass: Decodable { let audio: Int; let sum: Float; let start: String; let end: Float; let text: String }
+/// A bundled 16 kHz mono clip the UI tests stream instead of the microphone, with every model run and alignment the app's
+/// loop made over it with the real models on a Mac (testdata/…passes.json, from tools/demo-passes in the model-check
+/// workflow): the simulator's stand-in answers with them.
+struct TestClip: Sendable {
+    struct Run: Codable, Sendable { let audio: Int; let sum: Float; let context: String; let start: String; let text: String }
+    struct Alignment: Codable, Sendable { let audio: Int; let sum: Float; let text: String; let words: [Worker.Word] }
+    struct Passes: Codable, Sendable { var runs: [Run] = []; var alignments: [Alignment] = [] }
     let samples: [Float]
-    var lines: [Line] = []
-    var passes: [Pass]? = nil
-    /// CANTONESE_HOLD: the passes (comma-separated, counted from 1) to stop at for a screenshot.
+    let passes: Passes
+    /// CANTONESE_HOLD: the runs (comma-separated, counted from 1) to stop at for a screenshot.
     var holdAfter: Set<Int> {
         Set((ProcessInfo.processInfo.environment["CANTONESE_HOLD"] ?? "").split(separator: ",").compactMap { Int($0) })
     }
 
     /// CANTONESE_TEST_AUDIO: "1" streams the short test clip, "demo" the App Store demo conversation.
     static let current: TestClip? = ProcessInfo.processInfo.environment["CANTONESE_TEST_AUDIO"]
-        .flatMap { $0 == "demo" ? load("demo-16k", passes: true) : load("cantonese-16k", passes: false) }
+        .flatMap { load($0 == "demo" ? "demo-16k" : "cantonese-16k") }
 
-    private static func load(_ name: String, passes: Bool) -> TestClip? {
-        let json = { (n: String) in Bundle.main.url(forResource: n, withExtension: "json").flatMap { try? Data(contentsOf: $0) } }
-        guard let wav = Bundle.main.url(forResource: name, withExtension: "wav").flatMap({ try? Data(contentsOf: $0) }),
-              let samples = Worker.samples(wav: wav) else { return nil }
-        var clip = TestClip(samples: samples)
-        if passes {
-            guard let p = json(name + ".passes").flatMap({ try? JSONDecoder().decode([Pass].self, from: $0) }) else { return nil }
-            clip.passes = p
-        } else {
-            guard let l = json(name).flatMap({ try? JSONDecoder().decode([Line].self, from: $0) }) else { return nil }
-            clip.lines = l
-        }
-        return clip
+    private static func load(_ name: String) -> TestClip? {
+        let file = { (n: String, e: String) in Bundle.main.url(forResource: n, withExtension: e).flatMap { try? Data(contentsOf: $0) } }
+        guard let samples = file(name, "wav").flatMap(Worker.samples(wav:)),
+              let passes = file(name + ".passes", "json").flatMap({ try? JSONDecoder().decode(Passes.self, from: $0) })
+        else { return nil }
+        return TestClip(samples: samples, passes: passes)
     }
 }
 
@@ -239,50 +236,48 @@ extension Worker {
     /// The model is in memory: starting again is immediate.
     static var loaded: Bool { cached != nil }
 
-    /// Loads the model shipped inside the app (ios/fetch-model.sh puts it in Model/) once and keeps it.
+    /// Loads the models shipped inside the app (ios/fetch-model.sh puts them in Model/) once and keeps them.
     static func shared() async throws -> Worker {
         if let w = cached { return w }
         guard let dir = Bundle.main.url(forResource: "Model", withExtension: nil) else {
             throw CocoaError(.fileNoSuchFile)
         }
         #if targetEnvironment(simulator)
-        // The simulator has no Metal for MLX, so the UI tests run everything but the model, with this stand-in for it.
+        // The simulator has no Metal for MLX, so the UI tests run everything but the models, with this stand-in for
+        // them: the real models' answers to this very run (same audio, context and start) and alignment.
         _ = dir
-        let asr: ASR = { audio, start, onEnd, onText in
-            guard let clip = TestClip.current else { return start }
-            if let passes = clip.passes {
-                // The demo: the real model's answer to this very pass (same audio, same start).
-                let sum = audio.reduce(0, +)
-                guard let p = passes.first(where: { $0.audio == audio.count && $0.sum == sum && $0.start == start }) else {
-                    log.error("pass not recorded: \(audio.count) samples from \(start.count) chars")
-                    return start
-                }
-                onEnd(p.end)
-                if !p.text.isEmpty { onText(p.text) }
-                return p.text
+        let asr: ASR = { audio, context, start, _, onText in
+            let sum = audio.reduce(0, +)
+            guard let r = TestClip.current?.passes.runs.first(where: {
+                $0.audio == audio.count && $0.sum == sum && $0.context == context && $0.start == start
+            }) else {
+                log.error("run not recorded: \(audio.count) samples from \(start.count) chars")
+                return start
             }
-            // The test clip: find where the audio sits in it (10 ms from the first sound; the silence after the clip
-            // matches nothing: no words) and answer with the lines whose middle falls inside it.
-            guard let k = audio.firstIndex(where: { $0 != 0 }), k + 160 <= audio.count else { return start }
-            let probe = audio[k..<(k + 160)]
-            guard let at = (0...max(0, clip.samples.count - 160)).first(where: { o in
-                zip(clip.samples[o..<(o + 160)], probe).allSatisfy { $0 == $1 }
-            }) else { return start }
-            let from = Double(at - k) / 16000, to = Double(at - k + audio.count) / 16000
-            let said = clip.lines.filter { ($0.start + $0.end) / 2 >= from && ($0.start + $0.end) / 2 < to }.map(\.text).joined()
-            let text = said.hasPrefix(start) ? said : start + said   // like the model, it continues from `start`
-            onEnd(said.isEmpty ? 1 : 0)
-            onText(text)
-            return text
+            onText(r.text)
+            return r.text
+        }
+        let align: Aligner = { audio, text in
+            let sum = audio.reduce(0, +)
+            guard let a = TestClip.current?.passes.alignments.first(where: {
+                $0.audio == audio.count && $0.sum == sum && $0.text == text
+            }) else {
+                log.error("alignment not recorded: \(audio.count) samples, \(text.count) chars")
+                return []
+            }
+            return a.words
         }
         #else
         let model = try await Qwen3ASRModel.fromPretrained(
             modelId: modelId, cacheDir: dir.appendingPathComponent("asr"), offlineMode: true)
+        let aligner = try await Qwen3ForcedAligner.fromPretrained(
+            modelId: alignerId, cacheDir: dir.appendingPathComponent("aligner"), offlineMode: true)
         let asr = Worker.asr(model)
+        let align = Worker.aligner(aligner)
         #endif
         let converter = try ChineseConverter(options: [.traditionalize, .hkStandard])
         log.notice("model loaded")
-        let w = Worker(asr: asr, convert: { converter.convert($0) })
+        let w = Worker(asr: asr, align: align, convert: { converter.convert($0) })
         cached = w
         return w
     }

@@ -1,7 +1,7 @@
 import XCTest
 
 /// The phone replica: walks every flow on the simulator, streaming the bundled Cantonese clip instead of the mic. The
-/// simulator can't run MLX, so a stand-in answers for the model (Transcriber.swift); line cuts, OpenCC and the UI
+/// simulator can't run MLX, so a stand-in answers for the models (Transcriber.swift); the loop, OpenCC and the UI
 /// are real.
 final class CantoneseUITests: XCTestCase {
     func testEveryFlow() throws {
@@ -28,20 +28,19 @@ final class CantoneseUITests: XCTestCase {
         XCTAssertEqual(status(app), "聽緊", "never started listening (\(status(app)))")
         shot(app, "listening")
 
-        // The 7.5 s clip is cut into lines at its quietest point near 6 s; the first lands as a finished line.
+        // The 7.5 s clip (and a second of silence) goes through the sliding window: grey while it grows, one slide at 8 s.
         let transcript = app.staticTexts["transcript"]
-        let deadline = Date().addingTimeInterval(60)
-        while Date() < deadline, !(transcript.exists && transcript.label.contains("我哋")) {
-            Thread.sleep(forTimeInterval: 2)
-        }
+        XCTAssertTrue(wait(60) { transcript.exists && transcript.label.contains("我哋") }, "no captions (\(status(app)))")
         shot(app, "transcribed")
+        XCTAssertTrue(wait(60) { transcript.value as? String == "played" }, "the clip didn't finish playing")
+
+        app.buttons["mic"].tap()                  // 停止: one last run, everything black
+        XCTAssertTrue(app.buttons["開始"].waitForExistence(timeout: 10), "stop didn't stop")
+        Thread.sleep(forTimeInterval: 1)
         let text = transcript.exists ? transcript.label : ""
         print("TRANSCRIPT: \(text)")
         XCTAssertTrue(text.contains("我哋"), "lost the spoken form: \(text) (\(status(app)))")
         XCTAssertTrue(text.contains("飲茶"), "not HK Traditional: \(text)")
-
-        app.buttons["mic"].tap()                  // 停止
-        XCTAssertTrue(app.buttons["開始"].waitForExistence(timeout: 10), "stop didn't stop")
         app.buttons["clear"].tap()
         let cleared = app.staticTexts["transcript"]
         XCTAssertTrue(!cleared.exists || cleared.label.trimmingCharacters(in: .whitespaces).isEmpty, "clear left text behind")
@@ -73,10 +72,10 @@ final class CantoneseUITests: XCTestCase {
     }
 
     /// The App Store demo: a first start, then the demo conversation (testdata/demo) captioned live with the real model's
-    /// answers (the stand-in replays every pass the app's loop made over it on a Mac, tools/demo-passes). The appstore workflow
-    /// makes the store screenshots from its shots (tools/storeart): the loop stops after two passes (CANTONESE_HOLD), one
-    /// while only Cantonese has been said, one once English is mixed in, each showing that pass's grey tail.
-    static let holds = (chinese: 15, mixed: 56)   // the passes in testdata/demo/demo-16k.passes.json
+    /// answers (the stand-in replays every run and alignment the app's loop made over it on a Mac, tools/demo-passes). The
+    /// appstore workflow makes the store screenshots from its shots (tools/storeart): the loop stops after two runs
+    /// (CANTONESE_HOLD), one while only Cantonese has been said, one once English is mixed in, each showing grey text.
+    static let holds = (chinese: 15, mixed: 56)   // the runs in testdata/demo/demo-16k.passes.json
     func testDemo() throws {
         let app = XCUIApplication()
         app.launchEnvironment["CANTONESE_TEST_AUDIO"] = "demo"
@@ -101,12 +100,13 @@ final class CantoneseUITests: XCTestCase {
             print("\(name): \(transcript.label)")
             XCTAssertTrue(wait(30) { !transcript.exists || transcript.value as? String != "held" })
         }
-        // The rest of the conversation, then a second of silence; the last line is finished soon after.
-        Thread.sleep(forTimeInterval: 15)
+        // The rest of the conversation and a second of silence, then Stop: one last run, everything black.
+        XCTAssertTrue(wait(120) { transcript.value as? String == "played" }, "the demo didn't finish playing")
+        app.buttons["mic"].tap()
+        Thread.sleep(forTimeInterval: 2)
         let text = transcript.label
         print("DEMO TRANSCRIPT: \(text)")
-        XCTAssertTrue(text.contains("Central") && text.contains("proposal"), "demo captions missing: \(text)")
-        app.buttons["mic"].tap()
+        for words in ["Central", "proposal", "send"] { XCTAssertTrue(text.contains(words), "demo captions missing \(words): \(text)") }
     }
 
     private func wait(_ seconds: TimeInterval, until: () -> Bool) -> Bool {

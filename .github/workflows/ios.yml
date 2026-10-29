@@ -37,7 +37,7 @@ jobs:
           key: model-${{ hashFiles('ios/fetch-model.sh') }}
       - name: Fetch the models
         run: |
-          [ -f Model/asr/model.safetensors ] || { pip3 install -q --break-system-packages huggingface_hub && ./fetch-model.sh; }
+          [ -f Model/asr/model.safetensors ] && [ -f Model/aligner/model.safetensors ] || { pip3 install -q --break-system-packages huggingface_hub && ./fetch-model.sh; }
           du -sh Model/*
       - name: Xcode, xcodegen
         env:

@@ -1,7 +1,7 @@
 // swift-tools-version: 6.0
 // (Not named "replay": swift-huggingface depends on a package of that name, mattt/Replay.)
-// The app's own loop (ios/App/Worker.swift, linked in) with the real model on a Mac, over a recorded clip: every pass it
-// makes is written out for the simulator's stand-in (the App Store demo), and the screen after each pass is printed.
+// The app's own loop (ios/App/Worker.swift, linked in) with the real models on a Mac, over recorded clips: every run it
+// makes is written out for the simulator's stand-in (UI tests, App Store demo), and the screen after each run is printed.
 // The speech-swift revision is the app's (ios/project.yml); the model-check workflow checks they match.
 import PackageDescription
 
@@ -9,7 +9,7 @@ let package = Package(
     name: "demo-passes",
     platforms: [.macOS(.v15)],
     dependencies: [
-        .package(url: "https://github.com/DE0CH/speech-swift", revision: "e4f7502edfb4671725a7738a4424a069a8defefd"),
+        .package(url: "https://github.com/DE0CH/speech-swift", revision: "1f9ade2517c17afd0505d419c31c83da9ecea2b3"),
     ],
     targets: [
         .executableTarget(name: "demo-passes", dependencies: [.product(name: "Qwen3ASR", package: "speech-swift")]),

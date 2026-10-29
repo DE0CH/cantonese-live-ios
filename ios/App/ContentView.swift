@@ -13,7 +13,7 @@ struct ContentView: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .textSelection(.enabled)
                         .accessibilityIdentifier("transcript")
-                        .accessibilityValue(t.held ? "held" : "")
+                        .accessibilityValue(t.held ? "held" : t.played ? "played" : "")
                         .padding()
                     Color.clear.frame(height: 1).id("end")
                 }
