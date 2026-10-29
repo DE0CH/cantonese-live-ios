@@ -1,10 +1,10 @@
 // demo-passes MODEL_DIR CLIP.wav OUT.json [CLIP.wav OUT.json ...]
-//   MODEL_DIR: the app's model folder (ios/Model from ios/fetch-model.sh: asr/ and aligner/)
-//   OUT.json:  {runs: [{audio, sum, context, start, text}], alignments: [{audio, sum, text, words}]}: every model run and
-//              every alignment the app's loop made over the clip (the audio's length and sum, what it was given, the
-//              answer), for the simulator's stand-in (testdata/…passes.json). Stops the loop after the clip like the
-//              Stop button, so the last run is recorded too.
-// Every grey refresh that reused the prompt cache is run again without it; the texts must be the same (exit 1 if not).
+//   MODEL_DIR: the app's model folder (ios/Model from ios/fetch-model.sh: asr/)
+//   OUT.json:  {runs: [{audio, sum, context, start, text}]}: every model run the app's loop made over the clip (the
+//              audio's length and sum, what it was given, the answer), for the simulator's stand-in
+//              (testdata/…passes.json). Stops the loop after the clip like the Stop button, so the last run is recorded too.
+// Every run that reused the prompt cache is run again without it; the texts must be the same (exit 1 if not). Memory is
+// printed after every run, with MLX's buffer cache capped as in the app.
 import Foundation
 import Qwen3ASR
 
@@ -15,8 +15,7 @@ guard args.count >= 4, args.count % 2 == 0 else {
 }
 
 struct Run: Codable { let audio: Int; let sum: Float; let context: String; let start: String; let text: String }
-struct Alignment: Codable { let audio: Int; let sum: Float; let text: String; let words: [Worker.Word] }
-struct Passes: Codable { var runs: [Run] = []; var alignments: [Alignment] = [] }
+struct Passes: Codable { var runs: [Run] = [] }
 final class Record: @unchecked Sendable {
     var passes = Passes()
     var lines: [Worker.Line] = []
@@ -31,10 +30,9 @@ func ms(since t0: Date) -> Int { Int(Date().timeIntervalSince(t0) * 1000) }
 let dir = URL(fileURLWithPath: args[1])
 let model = try await Qwen3ASRModel.fromPretrained(
     modelId: Worker.modelId, cacheDir: dir.appendingPathComponent("asr"), offlineMode: true)
-let aligner = try await Qwen3ForcedAligner.fromPretrained(
-    modelId: Worker.alignerId, cacheDir: dir.appendingPathComponent("aligner"), offlineMode: true)
 let realASR = Worker.asr(model)
-let realAlign = Worker.aligner(aligner)
+let cacheCap = Qwen3ASRMemory.limitCache(to: Worker.cacheLimit)
+print("model loaded, \(Worker.memory())")
 var failed = false
 var totals: [String: [Int]] = [:]
 var checks = 0, mismatches = 0
@@ -52,13 +50,13 @@ for k in stride(from: 2, to: args.count, by: 2) {
         let took = ms(since: t0)
         let sum = audio.reduce(0, +)
         record.passes.runs.append(Run(audio: audio.count, sum: sum, context: context, start: start, text: text))
-        let kind = cache == nil ? (audio.count == Worker.window ? "slide" : "last (after Stop)") : "grey"
+        let kind = cache == nil ? "last (after Stop)" : "run"
         var note = ""
         if let cache, cache.hits > hits {
-            record.times["grey (cached prompt)", default: []].append(took)
+            record.times["run (cached prompt)", default: []].append(took)
             let t1 = Date()
             let plain = try realASR(audio, context, start, nil, { _ in })
-            record.times["grey again without the cache", default: []].append(ms(since: t1))
+            record.times["same run without the cache", default: []].append(ms(since: t1))
             record.cacheChecks += 1
             if plain != text {
                 record.mismatches += 1
@@ -66,18 +64,10 @@ for k in stride(from: 2, to: args.count, by: 2) {
             }
             note = " (cached prompt)" + note
         } else {
-            record.times[kind == "grey" ? "grey (filling the cache)" : kind, default: []].append(took)
+            record.times[kind == "run" ? "run (filling the cache)" : kind, default: []].append(took)
         }
-        record.last = "\(String(format: "%.2f", Double(audio.count) / 16000)) s, \(context.count) chars of context, from \"\(start)\", \(took) ms\(note): \"\(text)\""
+        record.last = "\(String(format: "%.2f", Double(audio.count) / 16000)) s, \(context.count) chars of context, from \"\(start)\", \(took) ms\(note): \"\(text)\"\n    \(Worker.memory())"
         return text
-    }, align: { audio, text in
-        let t0 = Date()
-        let words = try realAlign(audio, text)
-        let took = ms(since: t0)
-        record.times["alignment", default: []].append(took)
-        record.passes.alignments.append(Alignment(audio: audio.count, sum: audio.reduce(0, +), text: text, words: words))
-        record.last += "\n    aligned in \(took) ms: " + words.map { "\($0.text)@\(String(format: "%.2f", $0.start))" }.joined(separator: " ")
-        return words
     }, convert: { $0 })
     worker.onUpdate = { record.lines = $0 }
     worker.onPass = { n in
@@ -94,10 +84,10 @@ for k in stride(from: 2, to: args.count, by: 2) {
     let out = JSONEncoder()
     out.outputFormatting = [.prettyPrinted, .withoutEscapingSlashes, .sortedKeys]
     try out.encode(record.passes).write(to: URL(fileURLWithPath: args[k + 1]))
-    print("\(record.passes.runs.count) runs, \(record.passes.alignments.count) alignments")
+    print("\(record.passes.runs.count) runs")
     print("FINAL TRANSCRIPT:")
     for l in record.lines { print("  \(l.settled)\(l.tail)") }
-    print("prompt cache check: \(record.cacheChecks) cached grey refreshes run again without the cache, \(record.mismatches) differ")
+    print("prompt cache check: \(record.cacheChecks) cached runs run again without the cache, \(record.mismatches) differ")
     for (k, v) in record.times { totals[k, default: []] += v }
     checks += record.cacheChecks
     if record.failed { failed = true }
@@ -110,4 +100,6 @@ for (kind, v) in totals.sorted(by: { $0.key < $1.key }) {
     print("\(kind): \(v.count) calls, mean \(v.reduce(0, +) / max(1, v.count)), median \(s[s.count / 2]), max \(s.last ?? 0)")
 }
 print("PROMPT CACHE: \(checks) checked, \(mismatches) mismatches")
+print("MEMORY at the end: \(Worker.memory())")
+_ = cacheCap
 if mismatches > 0 || failed { exit(1) }

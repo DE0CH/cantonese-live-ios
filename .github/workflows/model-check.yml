@@ -33,7 +33,7 @@ jobs:
           time "$BIN" transcribe "$GITHUB_WORKSPACE/testdata/cantonese-16k.wav" --engine qwen3 -m aufklarer/Qwen3-ASR-1.7B-MLX-5bit 2>&1 | tail -15 | tee out.txt
           grep -q "我哋" out.txt
       - name: The app's loop over the test clip and the demo conversation with the real models (tools/demo-passes)
-        # Every model run and alignment it makes goes in the artifact (cantonese-16k.passes.json, demo-16k.passes.json):
+        # Every model run it makes goes in the artifact (cantonese-16k.passes.json, demo-16k.passes.json):
         # committed to testdata, they are what the simulator's stand-in answers in the UI tests and the App Store demo.
         # The log shows the screen after each run, the final transcripts, the timings and the prompt-cache check (every
         # grey refresh that reused the cached prompt is run again without it; any difference fails the step).

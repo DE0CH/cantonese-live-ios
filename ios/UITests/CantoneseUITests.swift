@@ -84,8 +84,8 @@ final class CantoneseUITests: XCTestCase {
     }
 
     /// The App Store demo, once per store language (the app's 廣東話, 简体 and English): a first start, then the demo
-    /// conversation (testdata/demo) captioned live with the real model's answers (the stand-in replays every run and
-    /// alignment the app's loop made over it on a Mac, tools/demo-passes). The appstore workflow makes the store
+    /// conversation (testdata/demo) captioned live with the real model's answers (the stand-in replays every run
+    /// the app's loop made over it on a Mac, tools/demo-passes). The appstore workflow makes the store
     /// screenshots from its shots (tools/storeart): the loop stops after two runs (CANTONESE_HOLD), one while only
     /// Cantonese has been said, one once English is mixed in, each showing grey text.
     static let holds = (chinese: 90, mixed: 279)   // the runs in testdata/demo/demo-16k.passes.json

@@ -28,7 +28,6 @@
 "開源元件" = "Open-source components";
 "完成" = "Done";
 "語音辨識模型（Qwen 團隊；MLX 5-bit 版 aufklarer）" = "Speech recognition model (Qwen team; MLX 5-bit by aufklarer)";
-"字詞時間對齊模型（Qwen 團隊；MLX 5-bit 版 aufklarer）" = "Word timing model (Qwen team; MLX 5-bit by aufklarer)";
 "喺 iPhone 度行模型（soniqo）" = "Runs the models on iPhone (soniqo)";
 "GPU 運算（Apple）" = "GPU computation (Apple)";
 "模型檔案（Hugging Face）" = "Model files (Hugging Face)";

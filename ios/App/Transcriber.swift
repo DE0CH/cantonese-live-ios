@@ -10,7 +10,7 @@ import UIKit
 /// screen: the screen stays awake while listening, and leaving the app stops it.
 ///
 /// The model runs all the time, with no speech detection in front of it, over a sliding window of the mic's 16 kHz
-/// audio (Worker): the window's words are timed by Qwen3-ForcedAligner 0.6B, and those well inside it turn black.
+/// audio (Worker): what two runs in a row agree on turns black.
 @MainActor
 final class Transcriber: ObservableObject {
     enum State: Equatable { case idle, loading(String), listening, failed(String) }
@@ -204,13 +204,12 @@ final class Transcriber: ObservableObject {
     }
 }
 
-/// A bundled 16 kHz mono clip the UI tests stream instead of the microphone, with every model run and alignment the app's
-/// loop made over it with the real models on a Mac (testdata/…passes.json, from tools/demo-passes in the model-check
+/// A bundled 16 kHz mono clip the UI tests stream instead of the microphone, with every model run the app's loop made
+/// over it with the real model on a Mac (testdata/…passes.json, from tools/demo-passes in the model-check
 /// workflow): the simulator's stand-in answers with them.
 struct TestClip: Sendable {
     struct Run: Codable, Sendable { let audio: Int; let sum: Float; let context: String; let start: String; let text: String }
-    struct Alignment: Codable, Sendable { let audio: Int; let sum: Float; let text: String; let words: [Worker.Word] }
-    struct Passes: Codable, Sendable { var runs: [Run] = []; var alignments: [Alignment] = [] }
+    struct Passes: Codable, Sendable { var runs: [Run] = [] }
     let samples: [Float]
     let passes: Passes
     /// CANTONESE_HOLD: the runs (comma-separated, counted from 1) to stop at for a screenshot.
@@ -233,10 +232,11 @@ struct TestClip: Sendable {
 
 extension Worker {
     private static var cached: Worker?
+    private static var cacheCap: AnyObject?   // held for as long as the app runs
     /// The model is in memory: starting again is immediate.
     static var loaded: Bool { cached != nil }
 
-    /// Loads the models shipped inside the app (ios/fetch-model.sh puts them in Model/) once and keeps them.
+    /// Loads the model shipped inside the app (ios/fetch-model.sh puts them in Model/) once and keeps them.
     static func shared() async throws -> Worker {
         if let w = cached { return w }
         guard let dir = Bundle.main.url(forResource: "Model", withExtension: nil) else {
@@ -244,7 +244,7 @@ extension Worker {
         }
         #if targetEnvironment(simulator)
         // The simulator has no Metal for MLX, so the UI tests run everything but the models, with this stand-in for
-        // them: the real models' answers to this very run (same audio, context and start) and alignment.
+        // them: the real model's answers to this very run (same audio, context and start).
         _ = dir
         let asr: ASR = { audio, context, start, _, onText in
             let sum = audio.reduce(0, +)
@@ -257,27 +257,15 @@ extension Worker {
             onText(r.text)
             return r.text
         }
-        let align: Aligner = { audio, text in
-            let sum = audio.reduce(0, +)
-            guard let a = TestClip.current?.passes.alignments.first(where: {
-                $0.audio == audio.count && $0.sum == sum && $0.text == text
-            }) else {
-                log.error("alignment not recorded: \(audio.count) samples, \(text.count) chars")
-                return []
-            }
-            return a.words
-        }
         #else
         let model = try await Qwen3ASRModel.fromPretrained(
             modelId: modelId, cacheDir: dir.appendingPathComponent("asr"), offlineMode: true)
-        let aligner = try await Qwen3ForcedAligner.fromPretrained(
-            modelId: alignerId, cacheDir: dir.appendingPathComponent("aligner"), offlineMode: true)
         let asr = Worker.asr(model)
-        let align = Worker.aligner(aligner)
+        cacheCap = Qwen3ASRMemory.limitCache(to: cacheLimit)
         #endif
         let converter = try ChineseConverter(options: [.traditionalize, .hkStandard])
-        log.notice("model loaded")
-        let w = Worker(asr: asr, align: align, convert: { converter.convert($0) })
+        log.notice("model loaded, \(Worker.memory(), privacy: .public)")
+        let w = Worker(asr: asr, convert: { converter.convert($0) })
         cached = w
         return w
     }

@@ -2,16 +2,17 @@ import Foundation
 import os
 import Qwen3ASR
 
-/// The model and everything that touches it. Audio and text state live on audioQueue, the models run on modelQueue.
+/// The model and everything that touches it. Audio and text state live on audioQueue, the model runs on modelQueue.
 ///
-/// The loop (a sliding window): the window is the mic's audio from `start` to now. Whenever the model is free and at
-/// least 100 ms of audio has come in since the last run started:
-/// - window of 8 s or more (a slide): the model transcribes its first 8 s, continuing from the black text of its first
-///   8/3 s, with the older black text as context; the forced aligner times that text, the words starting before 16/3 s
-///   turn black, the rest is grey; the window then starts 8/3 s later.
-/// - shorter (a grey refresh): the model transcribes the whole window the same way; what follows the black text is grey.
-/// - 10 s or more behind (window over 18 s): the phone can't keep up and listening stops with an error.
-/// Before the first slide nothing is black. Stopping runs the model once more over what is left, all of it black.
+/// The loop (a sliding window, LocalAgreement-2 as whisper_streaming does it): the window is the mic's audio from
+/// `start` to now, at most 8 s. Whenever the model is free and at least 100 ms of audio has come in since the last run
+/// started, the model transcribes the window, continuing from the window's black text, with older black text as
+/// context. What this run and the last agree on is black; the rest is grey.
+/// Once the window holds 8 s it slides: its first 8/3 s of audio go, and so does the start of the black text that was
+/// said in them, estimated from how fast the window's text is being spoken (a little less than that, so the text the
+/// next run continues from starts just before the audio rather than after it). That text becomes context.
+/// 10 s or more behind (the window waiting at over 18 s): the phone can't keep up and listening stops with an error.
+/// Stopping runs the model once more over what is left, all of it black.
 /// Black text is split into lines at the end of each sentence; the last line holds the unfinished black text and the grey.
 final class Worker: @unchecked Sendable {
     static let log = Logger(subsystem: "dev.de0ch.cantonese", category: "model")
@@ -19,15 +20,11 @@ final class Worker: @unchecked Sendable {
     /// One line on screen: `settled` (black) never changes again, `tail` (grey) is still being revised. A final line
     /// has no tail.
     struct Line: Identifiable, Equatable { let id: Int; var settled: String; var tail: String; var final: Bool }
-    /// A word the aligner timed: its text as written (with punctuation), start and end in seconds from the audio's start.
-    struct Word: Codable, Sendable { let text: String; let start: Float; let end: Float }
     /// The model: transcribe `audio` with `context` (older text, in the system prompt) continuing from `start`
     /// (written as if the model had already said it; the answer includes it). `cache` keeps the prompt before the audio
     /// between calls with the same context. `onText` gets the text so far after each token.
     typealias ASR = (_ audio: [Float], _ context: String, _ start: String, _ cache: Qwen3PromptCache?,
                      _ onText: @escaping @Sendable (String) -> Void) throws -> String
-    /// The forced aligner: when each word of `text` starts and ends in `audio`.
-    typealias Aligner = (_ audio: [Float], _ text: String) throws -> [Word]
 
     /// Every line on screen, after each change.
     var onUpdate: (([Line]) -> Void)?
@@ -42,9 +39,9 @@ final class Worker: @unchecked Sendable {
     var onHold: ((Bool) -> Void)?
 
     static let rate = 16000
-    static let window = 8 * rate                     // a slide transcribes the window's first 8 s...
-    static let blackBefore: Float = 16.0 / 3          // ...its words starting before 16/3 s turn black...
-    static func start(after slides: Int) -> Int { slides * window / 3 }   // ...and the window moves on 8/3 s
+    static let window = 8 * rate                     // a run hears at most 8 s...
+    static let step = window / 3                     // ...and a full window slides on 8/3 s
+    static let keep: Double = 0.8                    // of the black text estimated said in those 8/3 s, this much goes
     static let runEvery = rate / 10                  // a run at most every 100 ms of audio
     static let shortest = rate / 4                   // the model gets at least 0.25 s
     static let behind = 10 * rate                    // window - 8 s >= 10 s: the phone can't keep up
@@ -52,10 +49,12 @@ final class Worker: @unchecked Sendable {
     static var tooSlow: String { String(localized: "部手機轉得唔夠快，跟唔上，停咗。") }
 
     static let modelId = "aufklarer/Qwen3-ASR-1.7B-MLX-5bit"
-    static let alignerId = "aufklarer/Qwen3-ForcedAligner-0.6B-5bit"
+    /// MLX keeps freed buffers for reuse; one run's arrays need well under this (8 s of audio: the encoder's first
+    /// convolution, 8 × 480 × 64 × 50 floats, is the largest at 49 MB), and the default (a quarter of the phone's
+    /// memory, 2 GB) on top of the weights got the app killed.
+    static let cacheLimit = 256 * 1024 * 1024
 
     private let asr: ASR
-    private let align: Aligner
     private let convert: (String) -> String
     private let audioQueue = DispatchQueue(label: "cantonese.audio")
     private let modelQueue = DispatchQueue(label: "cantonese.model", qos: .userInitiated)
@@ -67,7 +66,7 @@ final class Worker: @unchecked Sendable {
         var grey = ""
         var dropped = false     // cleared away: nothing more shows
     }
-    private enum Kind: String { case grey, slide, last }
+    private enum Kind: String { case run, last }
     private struct Job {
         let kind: Kind; let audio: [Float]; let context: String; let start: String; let cache: Qwen3PromptCache?
         let line: Open; let at: Int   // the window's start (samples since listening began)
@@ -77,13 +76,15 @@ final class Worker: @unchecked Sendable {
     private var lines: [Line] = []
     private var nextId = 0
     private var open = Open()
-    private var audio: [Float] = []       // the window: from Self.start(after: slides) to `heard`
+    private var audio: [Float] = []       // the window: the audio not yet slid past
     private var heard = 0                 // samples since listening began
-    private var slides = 0
+    private var start = 0                 // where the window starts (samples since listening began)
     private var lastRun = 0               // `heard` when the last run started
-    private var blackWords: [(text: String, at: Int)] = []   // black words in the window (the start text of a run)
+    private var black = ""                // black text said in the window: what a run continues from
+    private var previous = ""             // the last run's text (it starts with `black`)
+    private var heardBy = 0               // samples the last run heard
     private var context = ""              // black text before the window
-    private var cache: Qwen3PromptCache?  // grey refreshes between two slides share it (same context)
+    private let cache = Qwen3PromptCache()   // the prompt before the audio, kept while the context stays the same
     private var incoming: [Float] = []    // mic audio of a new session while the last one's last run waits
     private var busy = false
     private var running = false
@@ -92,9 +93,8 @@ final class Worker: @unchecked Sendable {
     private var holding = false
     private var waiting: [CheckedContinuation<Void, Never>] = []   // `idle()` callers
 
-    init(asr: @escaping ASR, align: @escaping Aligner, convert: @escaping (String) -> String) {
+    init(asr: @escaping ASR, convert: @escaping (String) -> String) {
         self.asr = asr
-        self.align = align
         self.convert = convert
     }
 
@@ -108,13 +108,6 @@ final class Worker: @unchecked Sendable {
             options.promptCache = cache
             options.onText = onText
             return try model.transcribeThrowing(audio: audio, sampleRate: rate, options: options)
-        }
-    }
-
-    static func aligner(_ aligner: Qwen3ForcedAligner) -> Aligner {
-        { audio, text in
-            aligner.align(audio: audio, text: text, sampleRate: rate, language: "Chinese")
-                .map { Word(text: $0.text, start: $0.startTime, end: $0.endTime) }
         }
     }
 
@@ -202,22 +195,18 @@ final class Worker: @unchecked Sendable {
     /// A fresh window and line for a new listening session.
     private func newSession() {
         open = Open()
-        audio = []; heard = 0; slides = 0; lastRun = 0
-        blackWords = []; context = ""; cache = nil
+        audio = []; heard = 0; start = 0; lastRun = 0
+        black = ""; previous = ""; heardBy = 0; context = ""
     }
 
-    /// The text a run starts from: the black words in the window.
-    private var forced: String {
-        String(blackWords.map(\.text).joined().drop { $0.isWhitespace })
-    }
-
-    /// Start the next run if the model is free: the last one after a stop, a slide once the window holds 8 s, else a
-    /// grey refresh.
+    /// Start the next run if the model is free: the last one after a stop, else a run over the window (sliding it first
+    /// once it holds 8 s).
     private func schedule() {
         guard !busy, !holding else { return }
         let job: Job
         if finishing {
-            job = Job(kind: .last, audio: audio, context: context, start: forced, cache: nil, line: open, at: Self.start(after: slides))
+            job = Job(kind: .last, audio: Array(audio.prefix(Self.window)), context: context, start: black, cache: nil,
+                      line: open, at: start)
             finishing = false
             let next = incoming
             incoming = []
@@ -229,15 +218,10 @@ final class Worker: @unchecked Sendable {
                 fallBehind()
                 return
             }
+            if audio.count >= Self.window { slide() }
             lastRun = heard
-            if audio.count >= Self.window {
-                job = Job(kind: .slide, audio: Array(audio[..<Self.window]), context: context, start: forced, cache: nil,
-                          line: open, at: Self.start(after: slides))
-            } else {
-                if cache == nil { cache = Qwen3PromptCache() }
-                job = Job(kind: .grey, audio: audio, context: context, start: forced, cache: cache, line: open,
-                          at: Self.start(after: slides))
-            }
+            job = Job(kind: .run, audio: Array(audio.prefix(Self.window)), context: context, start: black, cache: cache,
+                      line: open, at: start)
         } else {
             for c in waiting { c.resume() }
             waiting = []
@@ -249,12 +233,10 @@ final class Worker: @unchecked Sendable {
             let text = transcribe(job) { [weak self] sofar in
                 self?.audioQueue.async { self?.showPartial(job, sofar) }
             }
-            let words = job.kind == .slide ? timed(job, text) : []
             audioQueue.async { [self] in
                 busy = false
                 switch job.kind {
-                case .grey: refreshed(job, text)
-                case .slide: slid(job, text, words)
+                case .run: ran(job, text)
                 case .last: finished(job, text)
                 }
                 passes += 1
@@ -274,40 +256,48 @@ final class Worker: @unchecked Sendable {
         }
     }
 
-    /// A grey refresh ended: everything after the black text is grey.
-    private func refreshed(_ job: Job, _ text: String) {
-        guard job.line === open else { return }
-        open.grey = String(text.dropFirst(job.start.count))
+    /// A run ended: what it and the last run agree on is black (LocalAgreement-2), the rest grey.
+    private func ran(_ job: Job, _ text: String) {
+        guard job.line === open, job.at == start, text.hasPrefix(black) else { return }
+        let agreed = Self.agreed(text, previous, atLeast: black)
+        open.black += agreed.dropFirst(black.count)
+        black = agreed
+        previous = text
+        heardBy = job.audio.count
+        open.grey = String(text.dropFirst(black.count))
+        splitSentences(open)
         show(open)
     }
 
-    /// A slide ended: the words starting in the window's first 16/3 s are black, the rest grey; the window moves on
-    /// 8/3 s, and the black words now before it become context.
-    private func slid(_ job: Job, _ text: String, _ words: [Word]) {
-        guard job.line === open else { return }
-        var black = job.start.count     // characters of `text` that are black
-        var last = blackWords.last?.at ?? 0
-        let chars = Array(text)
-        for (end, start) in Self.ends(of: Self.glued(words), in: text) where end > black {
-            guard start < Self.blackBefore else { break }
-            last = max(last, job.at + Int((start * Float(Self.rate)).rounded()))
-            let piece = String(chars[black..<end])
-            blackWords.append((piece, last))
-            open.black += piece
-            black = end
+    /// The window moves on 8/3 s. The black text said in that audio goes with it, to the context: as much as the last
+    /// run's text, spread evenly over what it heard, puts in 8/3 s, times `keep` (so the next run's start text begins a
+    /// little before its audio, never after), and never inside an English word.
+    private func slide() {
+        let perSample = heardBy > 0 ? Double(previous.count) / Double(heardBy) : 0
+        var n = min(black.count, Int(perSample * Double(Self.step) * Self.keep))
+        let chars = Array(black)
+        let isWord = { (c: Character) in c.isASCII && (c.isLetter || c.isNumber) }
+        while n > 0, n < chars.count, isWord(chars[n - 1]), isWord(chars[n]) { n -= 1 }
+        let gone = String(chars[..<n])
+        Self.log.notice("slide: \(n) of \(chars.count) black chars to the context")
+        context = String((context + gone).suffix(Self.contextChars).drop { $0.isWhitespace })
+        black = String(chars[n...])
+        previous = String(previous.dropFirst(n))
+        heardBy = max(0, heardBy - Self.step)
+        audio.removeFirst(Self.step)
+        start += Self.step
+    }
+
+    /// The longest common start of two runs' texts, never inside an English word and never shorter than `atLeast`
+    /// (the start both runs were given).
+    static func agreed(_ a: String, _ b: String, atLeast: String) -> String {
+        var n = zip(a, b).prefix { $0 == $1 }.count
+        let ca = Array(a)
+        let isWord = { (c: Character) in c.isASCII && (c.isLetter || c.isNumber) }
+        if n < ca.count, n > 0, isWord(ca[n - 1]), isWord(ca[n]) {
+            while n > 0, isWord(ca[n - 1]) { n -= 1 }
         }
-        open.grey = String(chars[black...])
-        slides += 1
-        let from = Self.start(after: slides)
-        audio.removeFirst(from - job.at)
-        while let w = blackWords.first, w.at < from {
-            context += w.text
-            blackWords.removeFirst()
-        }
-        context = String(context.suffix(Self.contextChars).drop { $0.isWhitespace })
-        cache = nil
-        splitSentences(open)
-        show(open)
+        return n >= atLeast.count ? String(ca[..<n]) : atLeast
     }
 
     /// The last run after a stop ended: all of its text is black and the line is finished.
@@ -328,36 +318,6 @@ final class Worker: @unchecked Sendable {
         for c in waiting { c.resume() }
         waiting = []
         onFail?(Self.tooSlow)
-    }
-
-    /// The aligner gives the silence before a word to that word: after a pause the next word "starts" right where the
-    /// last one ended (a word of 2 s, or of none with its neighbour 2 s later; the demo's 明 of 明天 turned black with the
-    /// 「到。」 before the pause, and the next run, continuing from it, never wrote 天). A word not ending in punctuation
-    /// is said with the word after it, so it starts at most `glue` seconds before that one.
-    static let glue: Float = 0.32
-    static func glued(_ words: [Word]) -> [Word] {
-        words.indices.map { i in
-            let w = words[i]
-            guard i + 1 < words.count, let last = w.text.last, last.isLetter || last.isNumber else { return w }
-            return Word(text: w.text, start: max(w.start, words[i + 1].start - glue), end: w.end)
-        }
-    }
-
-    /// When each word of the run's text starts: for every word the aligner timed, the end of its text in `text`
-    /// (characters; the aligner leaves out spaces between words) and its start in seconds.
-    static func ends(of words: [Word], in text: String) -> [(end: Int, start: Float)] {
-        let chars = Array(text)
-        var i = 0
-        var out: [(end: Int, start: Float)] = []
-        for w in words {
-            for c in w.text where !c.isWhitespace {
-                while i < chars.count, chars[i] != c, chars[i].isWhitespace { i += 1 }
-                guard i < chars.count, chars[i] == c else { return out }
-                i += 1
-            }
-            out.append((end: i, start: w.start))
-        }
-        return out
     }
 
     /// Sentences finished in the line's black text become lines of their own, before it.
@@ -423,6 +383,7 @@ final class Worker: @unchecked Sendable {
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             let cached = (job.cache?.hits ?? 0) > hits ? " (cached prompt)" : ""
             Self.log.notice("\(job.kind.rawValue, privacy: .public) run over \(job.audio.count / 16) ms with \(job.context.count) chars of context from \(job.start.count) chars in \(Int(Date().timeIntervalSince(t0) * 1000)) ms\(cached, privacy: .public): \(text, privacy: .private)")
+            Self.log.notice("memory: \(Self.memory(), privacy: .public)")
             return text.hasPrefix(job.start) ? text : job.start
         } catch {
             Self.log.error("\(job.kind.rawValue, privacy: .public) run failed after \(Int(Date().timeIntervalSince(t0) * 1000)) ms: \(error.localizedDescription, privacy: .public)")
@@ -430,22 +391,22 @@ final class Worker: @unchecked Sendable {
         }
     }
 
-    /// The aligner's times for a slide's text. If it has none, the text is spread evenly over the window.
-    private func timed(_ job: Job, _ text: String) -> [Word] {
-        guard !text.isEmpty else { return [] }
-        let t0 = Date()
-        var words: [Word] = []
-        do { words = try align(job.audio, text) } catch {
-            Self.log.error("alignment failed: \(error.localizedDescription, privacy: .public)")
-        }
-        Self.log.notice("alignment of \(text.count) chars over \(job.audio.count / 16) ms in \(Int(Date().timeIntervalSince(t0) * 1000)) ms: \(words.count) words")
-        if Self.ends(of: words, in: text).isEmpty {
-            let chars = Array(text)
-            let seconds = Float(job.audio.count) / Float(Self.rate)
-            words = chars.enumerated().map { i, c in
-                Word(text: String(c), start: seconds * Float(i) / Float(chars.count), end: seconds * Float(i + 1) / Float(chars.count))
-            }
-        }
-        return words
+    /// The app's memory footprint (what iOS counts against its limit), the headroom iOS still allows, and MLX's live and
+    /// pooled bytes, in MB.
+    static func memory() -> String {
+        var info = task_vm_info_data_t()
+        var count = mach_msg_type_number_t(MemoryLayout<task_vm_info_data_t>.size / MemoryLayout<natural_t>.size)
+        let ok = withUnsafeMutablePointer(to: &info) {
+            $0.withMemoryRebound(to: integer_t.self, capacity: Int(count)) { task_info(mach_task_self_, task_flavor_t(TASK_VM_INFO), $0, &count) }
+        } == KERN_SUCCESS
+        let mb = { (b: Int) in b / 1_048_576 }
+        var out = "footprint \(ok ? mb(Int(info.phys_footprint)) : -1)"
+        #if os(iOS)
+        out += ", headroom \(mb(Int(os_proc_available_memory())))"
+        #endif
+        #if !targetEnvironment(simulator)
+        out += ", MLX active \(mb(Qwen3ASRMemory.active)) pooled \(mb(Qwen3ASRMemory.cached)) peak \(mb(Qwen3ASRMemory.peak))"
+        #endif
+        return out
     }
 }

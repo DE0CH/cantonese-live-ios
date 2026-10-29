@@ -16,7 +16,6 @@ struct LicencesView: View {
         Part(name: "swift-transformers", use: String(localized: "模型檔案（Hugging Face）"), licence: "Apache 2.0", file: "Apache-2.0"),
         Part(name: "SwiftyOpenCC", use: String(localized: "轉香港繁體（DengXiang）"), licence: "MIT", file: "MIT-SwiftyOpenCC"),
         Part(name: "OpenCC", use: String(localized: "轉香港繁體（BYVoid）"), licence: "Apache 2.0", file: "Apache-2.0"),
-        Part(name: "Qwen3-ForcedAligner 0.6B", use: String(localized: "字詞時間對齊模型（Qwen 團隊；MLX 5-bit 版 aufklarer）"), licence: "Apache 2.0", file: "Apache-2.0"),
     ]
 
     @Environment(\.dismiss) private var dismiss
