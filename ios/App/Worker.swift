@@ -4,10 +4,10 @@ import Qwen3ASR
 
 /// The model and everything that touches it. Audio and text state live on audioQueue, the model runs on modelQueue.
 ///
-/// The loop (a sliding window, LocalAgreement-2 as whisper_streaming does it): the window is the mic's audio from
-/// `start` to now, at most 8 s. Whenever the model is free and at least 100 ms of audio has come in since the last run
-/// started, the model transcribes the window, continuing from the window's black text, with older black text as
-/// context. What this run and the last agree on is black; the rest is grey.
+/// The loop (a sliding window): the window is the mic's audio from `start` to now, at most 8 s. Whenever the model is
+/// free and at least 100 ms of audio has come in since the last run started, the model transcribes the window,
+/// continuing from the window's black text, with older black text as context; what it writes after that is grey. Those
+/// runs only keep the grey up to date: text turns black only where two overlapping windows agree, at a slide.
 /// Once the window holds 8 s it slides on 8/3 s, and the model transcribes the new window afresh (older black text as
 /// context, no start text). The two windows' texts are merged where they agree, as Hugging Face's ASR pipeline merges
 /// overlapping chunks: their longest common stretch (at least 2 characters) is text both windows heard. The old
@@ -268,15 +268,11 @@ final class Worker: @unchecked Sendable {
         }
     }
 
-    /// A run ended: what it and the last run agree on is black (LocalAgreement-2), the rest grey.
+    /// A run within the window ended: what it wrote after the black text is grey.
     private func ran(_ job: Job, _ text: String) {
         guard job.line === open, job.at == start, text.hasPrefix(black) else { return }
-        let agreed = Self.agreed(text, previous, atLeast: black)
-        open.black += agreed.dropFirst(black.count)
-        black = agreed
         previous = text
         open.grey = String(text.dropFirst(black.count))
-        splitSentences(open)
         show(open)
     }
 
@@ -324,22 +320,6 @@ final class Worker: @unchecked Sendable {
             }
         }
         return best
-    }
-
-    /// The longest common start of two runs' texts, never inside an English word and never shorter than `atLeast`
-    /// (the start both runs were given). Punctuation that ends the newer text stays out: on audio cut off mid-sentence
-    /// the model ends with 「。」 as if the clip were over, and two runs a moment apart agree on it.
-    static func agreed(_ a: String, _ b: String, atLeast: String) -> String {
-        var n = zip(a, b).prefix { $0 == $1 }.count
-        let ca = Array(a)
-        let isWord = { (c: Character) in c.isASCII && (c.isLetter || c.isNumber) }
-        if n < ca.count, n > 0, isWord(ca[n - 1]), isWord(ca[n]) {
-            while n > 0, isWord(ca[n - 1]) { n -= 1 }
-        }
-        if ca[n...].allSatisfy({ $0.isPunctuation || $0.isWhitespace }) {
-            while n > 0, ca[n - 1].isPunctuation || ca[n - 1].isWhitespace { n -= 1 }
-        }
-        return n >= atLeast.count ? String(ca[..<n]) : atLeast
     }
 
     /// The last run after a stop ended: all of its text is black and the line is finished.
