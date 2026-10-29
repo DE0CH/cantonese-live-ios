@@ -71,7 +71,8 @@ final class Worker: @unchecked Sendable {
     private struct Job {
         let kind: Kind; let audio: [Float]; let context: String; let start: String; let cache: Qwen3PromptCache?
         let line: Open; let at: Int   // the window's start (samples since listening began)
-        var black = ""                // the black text so far when it started (for the last run, which ends the session)
+        var black = ""                // for the last run, which ends the session: the black text so far
+        var lastFull = ""             // and the last complete window's text
     }
 
     // audioQueue state.
@@ -207,7 +208,7 @@ final class Worker: @unchecked Sendable {
         let job: Job
         if finishing {
             job = Job(kind: .last, audio: Array(audio.prefix(Self.window)), context: context, start: "", cache: nil,
-                      line: open, at: start, black: black)
+                      line: open, at: start, black: black, lastFull: lastFull)
             finishing = false
             let next = incoming
             incoming = []
@@ -270,20 +271,9 @@ final class Worker: @unchecked Sendable {
     /// then moves on 8/3 s.
     private func slid(_ job: Job, _ text: String) {
         guard job.line === open, job.at == start else { return }
-        let old = Array(lastFull), new = Array(text)
-        if let m = Self.longestCommon(old, new), m.length >= Self.overlap {
-            let end = m.a + m.length
-            // From where the black text so far ends in it; if it isn't there, only the agreed stretch is new.
-            let from = black.isEmpty ? 0 : (Self.meets(black, in: old) ?? m.a)
-            if end > from {
-                let more = String(old[from..<end])
-                black += more
-                open.black += more
-            }
-            Self.log.notice("merge on \(m.length) chars: black to \(end) of the last window's \(old.count)")
-        } else if !old.isEmpty {
-            Self.log.notice("merge: the two windows share no stretch, nothing turns black")
-        }
+        let more = Self.merged(black: black, old: lastFull, new: text)
+        black += more
+        open.black += more
         lastFull = text
         context = String(black.suffix(Self.contextChars).drop { $0.isWhitespace })
         audio.removeFirst(Self.step)
@@ -291,6 +281,21 @@ final class Worker: @unchecked Sendable {
         open.grey = Self.after(black, in: text)
         splitSentences(open)
         show(open)
+    }
+
+    /// Merging the last complete window's text `old` with `new` on their longest common stretch: the text of `old` that
+    /// turns black, from where the black text so far ends in it (only the stretch itself if it isn't there) to the end
+    /// of the stretch. Empty if they share no stretch of at least 2 characters.
+    static func merged(black: String, old: String, new: String) -> String {
+        let o = Array(old), n = Array(new)
+        guard let m = longestCommon(o, n), m.length >= overlap else {
+            if !o.isEmpty { log.notice("merge: the two windows share no stretch, nothing turns black") }
+            return ""
+        }
+        let end = m.a + m.length
+        let from = black.isEmpty ? 0 : (meets(black, in: o) ?? m.a)
+        log.notice("merge on \(m.length) chars: black to \(end) of the last window's \(o.count)")
+        return end > from ? String(o[from..<end]) : ""
     }
 
     /// Where the black text so far ends in `text`: just after the longest end of `black` (at least 2 characters) that
@@ -333,9 +338,11 @@ final class Worker: @unchecked Sendable {
     }
 
     /// The last run after a stop ended: all of its text is black and the line is finished.
+    /// The last complete window is merged with it first, so the audio it slid past since isn't lost.
     private func finished(_ job: Job, _ text: String) {
         let line = job.line
-        line.black += Self.after(job.black, in: text)
+        let more = Self.merged(black: job.black, old: job.lastFull, new: text)
+        line.black += more + Self.after(job.black + more, in: text)
         line.grey = ""
         splitSentences(line)
         close(line)
