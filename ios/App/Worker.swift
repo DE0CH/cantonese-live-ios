@@ -327,13 +327,17 @@ final class Worker: @unchecked Sendable {
     }
 
     /// The longest common start of two runs' texts, never inside an English word and never shorter than `atLeast`
-    /// (the start both runs were given).
+    /// (the start both runs were given). Punctuation that ends the newer text stays out: on audio cut off mid-sentence
+    /// the model ends with 「。」 as if the clip were over, and two runs a moment apart agree on it.
     static func agreed(_ a: String, _ b: String, atLeast: String) -> String {
         var n = zip(a, b).prefix { $0 == $1 }.count
         let ca = Array(a)
         let isWord = { (c: Character) in c.isASCII && (c.isLetter || c.isNumber) }
         if n < ca.count, n > 0, isWord(ca[n - 1]), isWord(ca[n]) {
             while n > 0, isWord(ca[n - 1]) { n -= 1 }
+        }
+        if ca[n...].allSatisfy({ $0.isPunctuation || $0.isWhitespace }) {
+            while n > 0, ca[n - 1].isPunctuation || ca[n - 1].isWhitespace { n -= 1 }
         }
         return n >= atLeast.count ? String(ca[..<n]) : atLeast
     }
