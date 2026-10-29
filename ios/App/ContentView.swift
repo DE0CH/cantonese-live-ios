@@ -12,6 +12,7 @@ struct ContentView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .textSelection(.enabled)
                     .accessibilityIdentifier("transcript")
+                    .accessibilityValue(t.held ? "held" : "")
                     .padding()
             }
             .defaultScrollAnchor(.bottom, for: .sizeChanges)   // follow new text

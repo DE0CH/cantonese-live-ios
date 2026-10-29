@@ -72,11 +72,15 @@ final class CantoneseUITests: XCTestCase {
         XCTAssertFalse(app.buttons["continue"].exists, "welcome sheet shown again")
     }
 
-    /// The App Store demo: a first start, then the demo conversation (testdata/demo) captioned live. The appstore workflow
-    /// makes the store screenshots from its shots (tools/storeart).
+    /// The App Store demo: a first start, then the demo conversation (testdata/demo) captioned live with the real model's
+    /// answers (the stand-in replays every pass the app's loop made over it on a Mac, tools/replay). The appstore workflow
+    /// makes the store screenshots from its shots (tools/storeart): the loop stops after two passes (CANTONESE_HOLD), one
+    /// while only Cantonese has been said, one once English is mixed in, each showing that pass's grey tail.
+    static let holds = (chinese: 0, mixed: 0)
     func testDemo() throws {
         let app = XCUIApplication()
         app.launchEnvironment["CANTONESE_TEST_AUDIO"] = "demo"
+        app.launchEnvironment["CANTONESE_HOLD"] = "\(Self.holds.chinese),\(Self.holds.mixed)"
         app.launchArguments = ["-welcomed", "NO"]
         app.launch()
         let go = app.buttons["continue"]
@@ -89,14 +93,28 @@ final class CantoneseUITests: XCTestCase {
         let ready = Date().addingTimeInterval(120)
         while Date() < ready, status(app) != "聽緊" { Thread.sleep(forTimeInterval: 0.2) }
         XCTAssertEqual(status(app), "聽緊")
-        // The conversation is 19.2 s, then a second of silence; the last line is finished soon after.
-        Thread.sleep(forTimeInterval: 22)
-        shot(app, "demo-captions")
-        Thread.sleep(forTimeInterval: 3)
-        let text = app.staticTexts["transcript"].label
+        let transcript = app.staticTexts["transcript"]
+        for name in ["demo-chinese", "demo-mixed"] {
+            XCTAssertTrue(wait(60) { transcript.value as? String == "held" }, "the loop didn't stop for \(name)")
+            shot(app, name)
+            print("\(name): \(transcript.label)")
+            XCTAssertTrue(wait(30) { transcript.value as? String != "held" })
+        }
+        // The rest of the conversation, then a second of silence; the last line is finished soon after.
+        Thread.sleep(forTimeInterval: 15)
+        let text = transcript.label
         print("DEMO TRANSCRIPT: \(text)")
         XCTAssertTrue(text.contains("Central") && text.contains("proposal"), "demo captions missing: \(text)")
         app.buttons["mic"].tap()
+    }
+
+    private func wait(_ seconds: TimeInterval, until: () -> Bool) -> Bool {
+        let end = Date().addingTimeInterval(seconds)
+        while Date() < end {
+            if until() { return true }
+            Thread.sleep(forTimeInterval: 0.2)
+        }
+        return until()
     }
 
     private func status(_ app: XCUIApplication) -> String { app.staticTexts["status"].label }

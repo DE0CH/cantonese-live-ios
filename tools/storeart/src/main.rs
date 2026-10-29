@@ -260,8 +260,8 @@ fn stills(args: &HashMap<String, String>) {
     let fonts = load_fonts(Path::new(&args["fonts"]));
     let (light, dark) = (Path::new(&args["light"]), Path::new(&args["dark"]));
     let shots = [
-        ("1-captions", find_shot(light, "-demo-captions.png")),
-        ("2-languages", find_shot(dark, "-demo-captions.png")),
+        ("1-captions", find_shot(light, "-demo-chinese.png")),
+        ("2-languages", find_shot(dark, "-demo-mixed.png")),
         ("3-on-device", find_shot(light, "-demo-welcome.png")),
     ];
     for locale in LOCALES {

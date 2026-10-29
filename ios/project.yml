@@ -36,7 +36,7 @@ targets:
         buildPhase: resources
       - path: ../testdata/demo/demo-16k.wav
         buildPhase: resources
-      - path: ../testdata/demo/demo-16k.json
+      - path: ../testdata/demo/demo-16k.passes.json
         buildPhase: resources
       - path: Model
         type: folder
