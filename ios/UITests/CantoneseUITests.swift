@@ -75,7 +75,7 @@ final class CantoneseUITests: XCTestCase {
     /// answers (the stand-in replays every run and alignment the app's loop made over it on a Mac, tools/demo-passes). The
     /// appstore workflow makes the store screenshots from its shots (tools/storeart): the loop stops after two runs
     /// (CANTONESE_HOLD), one while only Cantonese has been said, one once English is mixed in, each showing grey text.
-    static let holds = (chinese: 15, mixed: 56)   // the runs in testdata/demo/demo-16k.passes.json
+    static let holds = (chinese: 90, mixed: 279)   // the runs in testdata/demo/demo-16k.passes.json
     func testDemo() throws {
         let app = XCUIApplication()
         app.launchEnvironment["CANTONESE_TEST_AUDIO"] = "demo"
