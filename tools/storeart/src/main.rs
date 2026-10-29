@@ -21,7 +21,7 @@ struct Copy {
     sub: &'static str,
 }
 
-const LOCALES: [&str; 3] = ["zh-Hant", "en-GB", "en-US"];
+const LOCALES: [&str; 4] = ["zh-Hant", "zh-Hans", "en-GB", "en-US"];
 
 /// 0: captions, 1: three languages, 2: on the phone.
 fn copy(locale: &str) -> [Copy; 3] {
@@ -31,6 +31,11 @@ fn copy(locale: &str) -> [Copy; 3] {
             Copy { head: "講廣東話，即刻出字幕", sub: "身邊嘅說話，即時變成香港繁體字幕" },
             Copy { head: "中英普，混埋講都得", sub: "廣東話、英文、普通話一齊認得" },
             Copy { head: "全部喺手機度運行", sub: "唔使上網，唔收集任何資料" },
+        ],
+        "zh-Hans" => [
+            Copy { head: "粤语语音，实时字幕", sub: "周围的粤语语音实时转写为香港繁体字幕" },
+            Copy { head: "三语混合，均可识别", sub: "粤语、英语、普通话同句混用亦可识别" },
+            Copy { head: "全部在本机运行", sub: "无需联网，不收集任何数据" },
         ],
         _ => [
             Copy { head: "Speak Cantonese, see captions", sub: "What people around you say, as live Hong Kong Chinese captions" },
@@ -52,13 +57,14 @@ struct Fonts {
     regular: FontVec,
 }
 
-fn load_fonts(dir: &Path) -> Fonts {
+/// Noto Sans HK, or Noto Sans SC for Simplified Chinese (the HK subset lacks many Simplified characters).
+fn load_fonts(dir: &Path, region: &str) -> Fonts {
     let load = |n: &str| {
         let p = dir.join(n);
         FontVec::try_from_vec(std::fs::read(&p).unwrap_or_else(|e| panic!("{}: {e}", p.display())))
             .unwrap_or_else(|e| panic!("{}: {e}", p.display()))
     };
-    Fonts { bold: load("NotoSansHK-Bold.otf"), regular: load("NotoSansHK-Regular.otf") }
+    Fonts { bold: load(&format!("NotoSans{region}-Bold.otf")), regular: load(&format!("NotoSans{region}-Regular.otf")) }
 }
 
 /// Splits text into lines no wider than `width`: at spaces for Latin text, anywhere (but not before CJK punctuation)
@@ -257,7 +263,8 @@ fn find_shot(dir: &Path, suffix: &str) -> RgbImage {
 }
 
 fn stills(args: &HashMap<String, String>) {
-    let fonts = load_fonts(Path::new(&args["fonts"]));
+    let hk = load_fonts(Path::new(&args["fonts"]), "HK");
+    let sc = load_fonts(Path::new(&args["fonts"]), "SC");
     let (light, dark) = (Path::new(&args["light"]), Path::new(&args["dark"]));
     let shots = [
         ("1-captions", find_shot(light, "-demo-chinese.png")),
@@ -267,9 +274,10 @@ fn stills(args: &HashMap<String, String>) {
     for locale in LOCALES {
         let dir = Path::new(&args["out"]).join(locale);
         std::fs::create_dir_all(&dir).unwrap();
+        let fonts = if locale == "zh-Hans" { &sc } else { &hk };
         for (i, c) in copy(locale).iter().enumerate() {
             let p = dir.join(format!("{}.png", shots[i].0));
-            still(&fonts, c, &shots[i].1).save(&p).unwrap();
+            still(fonts, c, &shots[i].1).save(&p).unwrap();
             println!("{}", p.display());
         }
     }

@@ -30,15 +30,17 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with: { pattern: replica-screens-*, path: "${{ runner.temp }}/screens" }
-      - name: Noto Sans HK (notofonts/noto-cjk, pinned)
+      - name: Noto Sans HK and SC (notofonts/noto-cjk, pinned)
         run: |
           F="$RUNNER_TEMP/fonts"; mkdir -p "$F"
-          for w in Bold Regular; do
-            curl -sSfL -o "$F/NotoSansHK-$w.otf" "https://raw.githubusercontent.com/notofonts/noto-cjk/f8d157532fbfaeda587e826d4cd5b21a49186f7c/Sans/SubsetOTF/HK/NotoSansHK-$w.otf"
-          done
+          for r in HK SC; do for w in Bold Regular; do
+            curl -sSfL -o "$F/NotoSans$r-$w.otf" "https://raw.githubusercontent.com/notofonts/noto-cjk/f8d157532fbfaeda587e826d4cd5b21a49186f7c/Sans/SubsetOTF/$r/NotoSans$r-$w.otf"
+          done; done
           sha256sum -c <<EOF
           4bce16fbed09278cbdfb4d57749500038cdda70737925a846e3f6c59327ab46e  $F/NotoSansHK-Bold.otf
           8a43afea92bb58dfd9027bd7ac6f5b0b2662e2ffb3e7c1edc02c62b2b21924f1  $F/NotoSansHK-Regular.otf
+          c6cb5a93abaa9edc8ee7463b7ebb7f42d618d40e6ed2f7a5371c97b0b64767c0  $F/NotoSansSC-Bold.otf
+          faa6c9df652116dde789d351359f3d7e5d2285a2b2a1f04a2d7244df706d5ea9  $F/NotoSansSC-Regular.otf
           EOF
       - name: Screenshots for every localization (tools/storeart)
         run: |
