@@ -5,17 +5,32 @@ struct ContentView: View {
 
     var body: some View {
         NavigationStack {
-            ScrollView {
-                transcript
-                    .font(.title2)
-                    .lineSpacing(6)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .textSelection(.enabled)
-                    .accessibilityIdentifier("transcript")
-                    .accessibilityValue(t.held ? "held" : "")
-                    .padding()
+            ScrollViewReader { proxy in
+                ScrollView {
+                    transcript
+                        .font(.title2)
+                        .lineSpacing(6)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .textSelection(.enabled)
+                        .accessibilityIdentifier("transcript")
+                        .accessibilityValue(t.held ? "held" : "")
+                        .padding()
+                    Color.clear.frame(height: 1).id("end")
+                }
+                // Follow new text, unless the user has scrolled up to read: wherever a scroll of theirs comes to rest
+                // decides (at the bottom again: follow again).
+                .onScrollGeometryChange(for: Bool.self) { g in
+                    g.contentOffset.y + g.containerSize.height >= g.contentSize.height - 60
+                } action: { _, bottom in
+                    atBottom = bottom
+                }
+                .onScrollPhaseChange { old, new in
+                    if old == .interacting || old == .decelerating, new == .idle { following = atBottom }
+                }
+                .onChange(of: t.lines.reduce(0) { $0 + $1.settled.count + $1.tail.count + 1 }) {
+                    if following { proxy.scrollTo("end", anchor: .bottom) }
+                }
             }
-            .defaultScrollAnchor(.bottom, for: .sizeChanges)   // follow new text
             .overlay {
                 if t.lines.isEmpty {
                     ContentUnavailableView("未有字幕", systemImage: "captions.bubble",
@@ -42,6 +57,8 @@ struct ContentView: View {
     }
 
     @State private var showLicences = false
+    @State private var following = true
+    @State private var atBottom = true
     @State private var showWelcome = false
     @AppStorage("welcomed") private var welcomed = false
 
