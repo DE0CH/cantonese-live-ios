@@ -244,7 +244,7 @@ final class Worker: @unchecked Sendable {
 
     /// Show the text a pass is writing, once it is at least as long as the grey tail it replaces (no flicker).
     private func showPartial(_ job: Job, _ sofar: String) {
-        guard !job.final, job.id == currentId, sofar.hasPrefix(job.start) else { return }
+        guard !job.final, job.id == currentId, sofar.hasPrefix(job.start), !Self.isFiller(sofar) else { return }
         let tail = String(sofar.dropFirst(job.start.count))
         guard job.start.count + tail.count >= black.count + shownTail.count else { return }
         show(job.id, settled: job.start, tail: tail, final: false)
@@ -260,6 +260,14 @@ final class Worker: @unchecked Sendable {
             lines.sort { $0.id < $1.id }
         } else { return }
         onUpdate?(lines)
+    }
+
+    /// Text that is only a filler sound (嗯。, 呃…): the model writes these for silence and breaths as well, so a pass that
+    /// heard nothing else heard no words. Otherwise a pause between lines becomes a line of its own, and can close over
+    /// the start of the next sentence.
+    static func isFiller(_ text: String) -> Bool {
+        let sounds = text.filter { !$0.isPunctuation && !$0.isWhitespace }
+        return !sounds.isEmpty && sounds.allSatisfy { "嗯呃噢哦啊".contains($0) }
     }
 
     /// The longest common start of two passes' texts, never inside an English word and never shorter than `atLeast`
@@ -278,7 +286,8 @@ final class Worker: @unchecked Sendable {
         guard job.audio.count >= 4000 else { return job.start }
         let t0 = Date()
         do {
-            let raw = try asr(job.audio, job.start, onText).trimmingCharacters(in: .whitespacesAndNewlines)
+            var raw = try asr(job.audio, job.start, onText).trimmingCharacters(in: .whitespacesAndNewlines)
+            if Self.isFiller(raw) { raw = "" }
             Self.log.notice("pass over \(job.audio.count / 16) ms from \(job.start.count) chars in \(Int(Date().timeIntervalSince(t0) * 1000)) ms: \(raw, privacy: .private)")
             return raw
         } catch {
