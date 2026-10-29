@@ -25,7 +25,6 @@ const LOCALES: [&str; 4] = ["zh-Hant", "zh-Hans", "en-GB", "en-US"];
 
 /// 0: captions, 1: three languages, 2: on the phone.
 fn copy(locale: &str) -> [Copy; 3] {
-    let recognised = if locale == "en-US" { "recognized" } else { "recognised" };
     match locale {
         "zh-Hant" => [
             Copy { head: "講廣東話，即刻出字幕", sub: "身邊嘅說話，即時變成香港繁體字幕" },
@@ -41,11 +40,7 @@ fn copy(locale: &str) -> [Copy; 3] {
             Copy { head: "Speak Cantonese, see captions", sub: "What people around you say, as live Hong Kong Chinese captions" },
             Copy {
                 head: "Cantonese, English, Putonghua",
-                sub: if recognised == "recognized" {
-                    "All three recognized, even mixed in one sentence"
-                } else {
-                    "All three recognised, even mixed in one sentence"
-                },
+                sub: "All three recognised, even mixed in one sentence",
             },
             Copy { head: "Runs entirely on your iPhone", sub: "Works offline. No data collected." },
         ],
