@@ -96,6 +96,7 @@ final class CantoneseUITests: XCTestCase {
         let transcript = app.staticTexts["transcript"]
         for name in ["demo-chinese", "demo-mixed"] {
             XCTAssertTrue(wait(60) { transcript.exists && transcript.value as? String == "held" }, "the loop didn't stop for \(name)")
+            Thread.sleep(forTimeInterval: 0.5)   // the screen takes the newest lines every 0.1 s
             shot(app, name)
             print("\(name): \(transcript.label)")
             XCTAssertTrue(wait(30) { !transcript.exists || transcript.value as? String != "held" })

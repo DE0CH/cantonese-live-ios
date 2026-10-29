@@ -79,7 +79,11 @@ struct ContentView: View {
             Button { t.isRunning ? t.stop() : t.start() } label: {
                 Group {
                     if isLoading { ProgressView().controlSize(.large).tint(.white) }
-                    else { Image(systemName: t.isRunning ? "stop.fill" : "mic.fill").font(.title) }
+                    else {
+                        Image(systemName: t.isRunning ? "stop.fill" : "mic.fill")
+                            .font(.title)
+                            .contentTransition(.symbolEffect(.replace))
+                    }
                 }
                 .frame(width: 64, height: 64)
             }

@@ -34,6 +34,9 @@ final class Transcriber: ObservableObject {
     private var filePlayback: Task<Void, Never>?
     private var loadTask: Task<Void, Never>?
     private var worker: Worker?
+    /// The audio session and engine are switched on and off here, not on the main thread: those calls block (switching
+    /// the session off can take a few hundred ms), which froze the button at the tap.
+    private nonisolated static let session = DispatchQueue(label: "cantonese.session", qos: .userInitiated)
     private let target = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 16000, channels: 1, interleaved: false)!
     /// UI tests stream a bundled clip instead of the microphone (the simulator has no real mic).
     private let testClip = TestClip.current
@@ -49,14 +52,14 @@ final class Transcriber: ObservableObject {
 
     func start() {
         guard !isRunning else { return }
-        state = .loading("載入模型…")
+        // The button changes at the tap: listening at once once the model is in memory, the audio comes on behind it.
+        state = Worker.loaded ? .listening : .loading("載入模型…")
         loadTask = Task {
             do {
                 let worker = try await Worker.shared()
                 try Task.checkCancellation()
-                worker.onUpdate = { [weak self] lines in
-                    Task { @MainActor in self?.lines = lines }
-                }
+                let latest = Latest<[Worker.Line]> { [weak self] lines in self?.lines = lines }
+                worker.onUpdate = { latest.send($0) }
                 worker.onHold = { [weak self] held in
                     Task { @MainActor in self?.held = held }
                 }
@@ -73,9 +76,11 @@ final class Transcriber: ObservableObject {
                 return
             }
             do {
-                if testAudio { streamTestFile() } else { try startMicrophone() }
+                if testAudio { streamTestFile() } else { try await startMicrophone() }
                 UIApplication.shared.isIdleTimerDisabled = true   // the screen stays on while listening
                 state = .listening
+            } catch is CancellationError {
+                return
             } catch {
                 fail("用唔到咪：\(error.localizedDescription)")
             }
@@ -103,29 +108,27 @@ final class Transcriber: ObservableObject {
 
     private func stopAudio() {
         UIApplication.shared.isIdleTimerDisabled = false
-        engine?.inputNode.removeTap(onBus: 0)
-        engine?.stop()
-        engine = nil
+        let engine = self.engine
+        self.engine = nil
         filePlayback?.cancel()
         filePlayback = nil
         for o in sessionObservers { NotificationCenter.default.removeObserver(o) }
         sessionObservers = []
+        Self.session.async { Self.tearDown(engine) }
+    }
+
+    private nonisolated static func tearDown(_ engine: AVAudioEngine?) {
+        engine?.inputNode.removeTap(onBus: 0)
+        engine?.stop()
         try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
     }
 
-    private func startMicrophone() throws {
-        // Always the iPhone's own mic, mixed with whatever else plays: Bluetooth headphones stay on A2DP (output only,
-        // so they keep playing music in full quality and never become the mic); with no headphones other apps' audio
-        // goes to the speaker, not the earpiece. A call or another app taking the audio session stops transcription.
+    private func startMicrophone() async throws {
         let session = AVAudioSession.sharedInstance()
-        try session.setCategory(.playAndRecord, mode: .measurement,
-                                options: [.mixWithOthers, .allowBluetoothA2DP, .defaultToSpeaker])
-        try session.setActive(true)
-        pinBuiltInMic()
         let center = NotificationCenter.default
         sessionObservers = [
-            center.addObserver(forName: AVAudioSession.routeChangeNotification, object: session, queue: .main) { [weak self] _ in
-                MainActor.assumeIsolated { self?.pinBuiltInMic() }
+            center.addObserver(forName: AVAudioSession.routeChangeNotification, object: session, queue: .main) { _ in
+                Self.session.async { Self.pinBuiltInMic() }
             },
             center.addObserver(forName: AVAudioSession.interruptionNotification, object: session, queue: .main) { [weak self] note in
                 let type = (note.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt).flatMap(AVAudioSession.InterruptionType.init)
@@ -136,12 +139,34 @@ final class Transcriber: ObservableObject {
                 MainActor.assumeIsolated { self?.stop() }
             },
         ]
+        let (worker, target) = (self.worker, self.target)
+        let engine = try await withCheckedThrowingContinuation { (done: CheckedContinuation<AVAudioEngine, Error>) in
+            Self.session.async {
+                do { done.resume(returning: try Self.startEngine(feeding: worker, target: target)) } catch { done.resume(throwing: error) }
+            }
+        }
+        if Task.isCancelled {   // stopped while the audio came on
+            Self.session.async { Self.tearDown(engine) }
+            throw CancellationError()
+        }
+        self.engine = engine
+    }
+
+    /// The mic's audio, converted to 16 kHz mono, into the worker. Runs on the session queue.
+    private nonisolated static func startEngine(feeding worker: Worker?, target: AVAudioFormat) throws -> AVAudioEngine {
+        // Always the iPhone's own mic, mixed with whatever else plays: Bluetooth headphones stay on A2DP (output only,
+        // so they keep playing music in full quality and never become the mic); with no headphones other apps' audio
+        // goes to the speaker, not the earpiece. A call or another app taking the audio session stops transcription.
+        let session = AVAudioSession.sharedInstance()
+        try session.setCategory(.playAndRecord, mode: .measurement,
+                                options: [.mixWithOthers, .allowBluetoothA2DP, .defaultToSpeaker])
+        try session.setActive(true)
+        pinBuiltInMic()
         let engine = AVAudioEngine()
         let input = engine.inputNode
         let format = input.outputFormat(forBus: 0)
         guard let converter = AVAudioConverter(from: format, to: target) else { throw CocoaError(.featureUnsupported) }
-        let worker = self.worker
-        input.installTap(onBus: 0, bufferSize: 4096, format: format) { [target] buffer, _ in
+        input.installTap(onBus: 0, bufferSize: 4096, format: format) { buffer, _ in
             let capacity = AVAudioFrameCount(Double(buffer.frameLength) * 16000 / format.sampleRate) + 16
             guard let out = AVAudioPCMBuffer(pcmFormat: target, frameCapacity: capacity) else { return }
             var fed = false
@@ -155,10 +180,10 @@ final class Transcriber: ObservableObject {
         }
         engine.prepare()
         try engine.start()
-        self.engine = engine
+        return engine
     }
 
-    private func pinBuiltInMic() {
+    private nonisolated static func pinBuiltInMic() {
         let session = AVAudioSession.sharedInstance()
         guard session.currentRoute.inputs.first?.portType != .builtInMic,
               let mic = session.availableInputs?.first(where: { $0.portType == .builtInMic }) else { return }
@@ -211,6 +236,8 @@ struct TestClip {
 
 extension Worker {
     private static var cached: Worker?
+    /// The model is in memory: starting again is immediate.
+    static var loaded: Bool { cached != nil }
 
     /// Loads the model shipped inside the app (ios/fetch-model.sh puts it in Model/) once and keeps it.
     static func shared() async throws -> Worker {
@@ -256,5 +283,30 @@ extension Worker {
         let w = Worker(asr: asr, convert: { converter.convert($0) })
         cached = w
         return w
+    }
+}
+
+/// Hands the newest value to the main thread at most every 0.1 s. The model writes a token at a time, and laying out the
+/// whole transcript that often kept the main thread too busy to show a tap.
+final class Latest<Value>: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value: Value?
+    private let deliver: @MainActor (Value) -> Void
+
+    init(_ deliver: @escaping @MainActor (Value) -> Void) { self.deliver = deliver }
+
+    func send(_ new: Value) {
+        lock.lock()
+        let first = value == nil
+        value = new
+        lock.unlock()
+        guard first else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [self] in
+            lock.lock()
+            let v = value
+            value = nil
+            lock.unlock()
+            if let v { MainActor.assumeIsolated { deliver(v) } }
+        }
     }
 }
