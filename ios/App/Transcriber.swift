@@ -205,7 +205,7 @@ final class Transcriber: ObservableObject {
 /// (testdata/demo/demo-16k.passes.json, from tools/demo-passes in the model-check workflow).
 struct TestClip {
     struct Line: Decodable { let start: Double; let end: Double; let text: String }
-    struct Pass: Decodable { let audio: Int; let sum: Float; let start: String; let text: String }
+    struct Pass: Decodable { let audio: Int; let sum: Float; let start: String; let end: Float; let text: String }
     let samples: [Float]
     var lines: [Line] = []
     var passes: [Pass]? = nil
@@ -248,7 +248,7 @@ extension Worker {
         #if targetEnvironment(simulator)
         // The simulator has no Metal for MLX, so the UI tests run everything but the model, with this stand-in for it.
         _ = dir
-        let asr: ASR = { audio, start, onText in
+        let asr: ASR = { audio, start, onEnd, onText in
             guard let clip = TestClip.current else { return start }
             if let passes = clip.passes {
                 // The demo: the real model's answer to this very pass (same audio, same start).
@@ -257,7 +257,8 @@ extension Worker {
                     log.error("pass not recorded: \(audio.count) samples from \(start.count) chars")
                     return start
                 }
-                onText(p.text)
+                onEnd(p.end)
+                if !p.text.isEmpty { onText(p.text) }
                 return p.text
             }
             // The test clip: find where the audio sits in it (10 ms from the first sound; the silence after the clip
@@ -270,6 +271,7 @@ extension Worker {
             let from = Double(at - k) / 16000, to = Double(at - k + audio.count) / 16000
             let said = clip.lines.filter { ($0.start + $0.end) / 2 >= from && ($0.start + $0.end) / 2 < to }.map(\.text).joined()
             let text = said.hasPrefix(start) ? said : start + said   // like the model, it continues from `start`
+            onEnd(said.isEmpty ? 1 : 0)
             onText(text)
             return text
         }

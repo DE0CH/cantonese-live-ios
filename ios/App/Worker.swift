@@ -11,7 +11,10 @@ final class Worker: @unchecked Sendable {
     struct Line: Identifiable { let id: Int; var settled: String; var tail: String; var final: Bool }
     /// A model job: transcribe `audio` continuing from `start`; a final one closes its line.
     private struct Job { let id: Int; let audio: [Float]; let start: String; let final: Bool }
-    typealias ASR = (_ audio: [Float], _ start: String, _ onText: @escaping @Sendable (String) -> Void) throws -> String
+    /// The model: transcribe `audio` continuing from `start`; `onEnd` gets the probability it gives to ending at once
+    /// (before any text), `onText` the text so far after each token.
+    typealias ASR = (_ audio: [Float], _ start: String, _ onEnd: @escaping @Sendable (Float) -> Void,
+                     _ onText: @escaping @Sendable (String) -> Void) throws -> String
 
     /// Every line on screen, after each change.
     var onUpdate: (([Line]) -> Void)?
@@ -62,10 +65,11 @@ final class Worker: @unchecked Sendable {
 
     /// The model as the loop calls it: up to 200 tokens, continuing from `start`, the text so far after every token.
     static func asr(_ model: Qwen3ASRModel) -> ASR {
-        { audio, start, onText in
+        { audio, start, onEnd, onText in
             var options = Qwen3DecodingOptions()
             options.maxTokens = 200
             options.prefix = start
+            options.onEndProbability = onEnd
             options.onText = onText
             return try model.transcribeThrowing(audio: audio, sampleRate: 16000, options: options)
         }
@@ -244,7 +248,7 @@ final class Worker: @unchecked Sendable {
 
     /// Show the text a pass is writing, once it is at least as long as the grey tail it replaces (no flicker).
     private func showPartial(_ job: Job, _ sofar: String) {
-        guard !job.final, job.id == currentId, sofar.hasPrefix(job.start), !Self.isFiller(sofar) else { return }
+        guard !job.final, job.id == currentId, sofar.hasPrefix(job.start) else { return }
         let tail = String(sofar.dropFirst(job.start.count))
         guard job.start.count + tail.count >= black.count + shownTail.count else { return }
         show(job.id, settled: job.start, tail: tail, final: false)
@@ -262,13 +266,10 @@ final class Worker: @unchecked Sendable {
         onUpdate?(lines)
     }
 
-    /// Text that is only a filler sound (嗯。, 呃…): the model writes these for silence and breaths as well, so a pass that
-    /// heard nothing else heard no words. Otherwise a pause between lines becomes a line of its own, and can close over
-    /// the start of the next sentence.
-    static func isFiller(_ text: String) -> Bool {
-        let sounds = text.filter { !$0.isPunctuation && !$0.isWhitespace }
-        return !sounds.isEmpty && sounds.allSatisfy { "嗯呃噢哦啊".contains($0) }
-    }
+    /// A line's first words only count once the model gives ending at once (no speech) less than this probability. On
+    /// silence and noise greedy decoding still writes its likeliest text (「嗯。」) even when ending is nearly as likely;
+    /// this asks the model how sure it is instead. Measured on the demo with the real model (tools/demo-passes).
+    static let noSpeech: Float = 2   // measuring: off
 
     /// The longest common start of two passes' texts, never inside an English word and never shorter than `atLeast`
     /// (the start both passes were given).
@@ -286,8 +287,14 @@ final class Worker: @unchecked Sendable {
         guard job.audio.count >= 4000 else { return job.start }
         let t0 = Date()
         do {
-            var raw = try asr(job.audio, job.start, onText).trimmingCharacters(in: .whitespacesAndNewlines)
-            if Self.isFiller(raw) { raw = "" }
+            final class Silent: @unchecked Sendable { var yes = false }   // set and read on the model's thread
+            let silent = Silent()
+            var raw = try asr(job.audio, job.start, { end in
+                silent.yes = job.start.isEmpty && end >= Self.noSpeech
+            }, { sofar in
+                if !silent.yes { onText(sofar) }
+            }).trimmingCharacters(in: .whitespacesAndNewlines)
+            if silent.yes { raw = "" }
             Self.log.notice("pass over \(job.audio.count / 16) ms from \(job.start.count) chars in \(Int(Date().timeIntervalSince(t0) * 1000)) ms: \(raw, privacy: .private)")
             return raw
         } catch {

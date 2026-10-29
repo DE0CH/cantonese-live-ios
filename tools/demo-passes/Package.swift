@@ -9,7 +9,7 @@ let package = Package(
     name: "demo-passes",
     platforms: [.macOS(.v15)],
     dependencies: [
-        .package(url: "https://github.com/DE0CH/speech-swift", revision: "6e7bdff83c8cc638083f150501268f9581bd5a39"),
+        .package(url: "https://github.com/DE0CH/speech-swift", revision: "e4f7502edfb4671725a7738a4424a069a8defefd"),
     ],
     targets: [
         .executableTarget(name: "demo-passes", dependencies: [.product(name: "Qwen3ASR", package: "speech-swift")]),
