@@ -288,7 +288,7 @@ final class Worker: @unchecked Sendable {
         var black = job.start.count     // characters of `text` that are black
         var last = blackWords.last?.at ?? 0
         let chars = Array(text)
-        for (end, start) in Self.ends(of: words, in: text) where end > black {
+        for (end, start) in Self.ends(of: Self.glued(words), in: text) where end > black {
             guard start < Self.blackBefore else { break }
             last = max(last, job.at + Int((start * Float(Self.rate)).rounded()))
             let piece = String(chars[black..<end])
@@ -328,6 +328,19 @@ final class Worker: @unchecked Sendable {
         for c in waiting { c.resume() }
         waiting = []
         onFail?(Self.tooSlow)
+    }
+
+    /// The aligner gives the silence before a word to that word: after a pause the next word "starts" right where the
+    /// last one ended (a word of 2 s, or of none with its neighbour 2 s later; the demo's 明 of 明天 turned black with the
+    /// 「到。」 before the pause, and the next run, continuing from it, never wrote 天). A word not ending in punctuation
+    /// is said with the word after it, so it starts at most `glue` seconds before that one.
+    static let glue: Float = 0.32
+    static func glued(_ words: [Word]) -> [Word] {
+        words.indices.map { i in
+            let w = words[i]
+            guard i + 1 < words.count, let last = w.text.last, last.isLetter || last.isNumber else { return w }
+            return Word(text: w.text, start: max(w.start, words[i + 1].start - glue), end: w.end)
+        }
     }
 
     /// When each word of the run's text starts: for every word the aligner timed, the end of its text in `text`
