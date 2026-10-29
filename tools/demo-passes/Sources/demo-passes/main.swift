@@ -31,7 +31,7 @@ let dir = URL(fileURLWithPath: args[1])
 let model = try await Qwen3ASRModel.fromPretrained(
     modelId: Worker.modelId, cacheDir: dir.appendingPathComponent("asr"), offlineMode: true)
 let realASR = Worker.asr(model)
-let cacheCap = Qwen3ASRMemory.limitCache(to: Worker.cacheLimit)
+let cacheCap = Qwen3ASRMLXMemory.limitCache(to: Worker.cacheLimit)
 print("model loaded, \(Worker.memory())")
 var failed = false
 var totals: [String: [Int]] = [:]

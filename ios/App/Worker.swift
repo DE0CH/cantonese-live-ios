@@ -405,7 +405,7 @@ final class Worker: @unchecked Sendable {
         out += ", headroom \(mb(Int(os_proc_available_memory())))"
         #endif
         #if !targetEnvironment(simulator)
-        out += ", MLX active \(mb(Qwen3ASRMemory.active)) pooled \(mb(Qwen3ASRMemory.cached)) peak \(mb(Qwen3ASRMemory.peak))"
+        out += ", MLX active \(mb(Qwen3ASRMLXMemory.active)) pooled \(mb(Qwen3ASRMLXMemory.cached)) peak \(mb(Qwen3ASRMLXMemory.peak))"
         #endif
         return out
     }

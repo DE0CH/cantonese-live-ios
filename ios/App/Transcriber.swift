@@ -261,7 +261,7 @@ extension Worker {
         let model = try await Qwen3ASRModel.fromPretrained(
             modelId: modelId, cacheDir: dir.appendingPathComponent("asr"), offlineMode: true)
         let asr = Worker.asr(model)
-        cacheCap = Qwen3ASRMemory.limitCache(to: cacheLimit)
+        cacheCap = Qwen3ASRMLXMemory.limitCache(to: cacheLimit)
         #endif
         let converter = try ChineseConverter(options: [.traditionalize, .hkStandard])
         log.notice("model loaded, \(Worker.memory(), privacy: .public)")
