@@ -1,0 +1,1 @@
+/* 廣東話 (the strings in the code are this language, so this file only marks it as a localization). Without a zh-HK localization, Hong Kong phones would fall back to zh-Hant (書面語). */

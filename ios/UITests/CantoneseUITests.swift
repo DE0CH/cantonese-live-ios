@@ -7,7 +7,7 @@ final class CantoneseUITests: XCTestCase {
     func testEveryFlow() throws {
         let app = XCUIApplication()
         app.launchEnvironment["CANTONESE_TEST_AUDIO"] = "1"
-        app.launchArguments = ["-welcomed", "NO"]   // a first start, whatever ran before
+        app.launchArguments = ["-welcomed", "NO"] + Self.cantonese   // a first start, whatever ran before
         app.launch()
 
         // First start: the welcome sheet, once.
@@ -21,8 +21,8 @@ final class CantoneseUITests: XCTestCase {
         XCTAssertFalse(app.buttons["clear"].isEnabled, "clear is on with nothing to clear")
         app.buttons["mic"].tap()
         let ready = Date().addingTimeInterval(3 * 60)
-        while Date() < ready, status(app) != "聽緊" {
-            if status(app).hasPrefix("用唔到") { break }
+        while Date() < ready, state(app) != "listening" {
+            if state(app) == "failed" { break }
             Thread.sleep(forTimeInterval: 1)
         }
         XCTAssertEqual(status(app), "聽緊", "never started listening (\(status(app)))")
@@ -65,39 +65,57 @@ final class CantoneseUITests: XCTestCase {
 
         // The welcome sheet doesn't come back.
         app.terminate()
-        app.launchArguments = []
+        app.launchArguments = Self.cantonese
         app.launch()
         XCTAssertTrue(app.buttons["mic"].waitForExistence(timeout: 10))
         XCTAssertFalse(app.buttons["continue"].exists, "welcome sheet shown again")
     }
 
-    /// The App Store demo: a first start, then the demo conversation (testdata/demo) captioned live with the real model's
-    /// answers (the stand-in replays every run and alignment the app's loop made over it on a Mac, tools/demo-passes). The
-    /// appstore workflow makes the store screenshots from its shots (tools/storeart): the loop stops after two runs
-    /// (CANTONESE_HOLD), one while only Cantonese has been said, one once English is mixed in, each showing grey text.
+    /// A phone in Hong Kong Chinese gets 廣東話, in Taiwan Chinese 書面語, in Simplified Chinese 简体, otherwise English.
+    func testLanguages() throws {
+        for (language, empty) in [("zh-Hant-HK", "未有字幕"), ("zh-Hant-TW", "尚無字幕"), ("zh-Hans-CN", "暂无字幕"), ("en-HK", "No captions yet")] {
+            let app = XCUIApplication()
+            app.launchArguments = ["-welcomed", "YES", "-AppleLanguages", "(\(language))"]
+            app.launch()
+            XCTAssertTrue(app.staticTexts[empty].waitForExistence(timeout: 10), "\(language): no 「\(empty)」")
+            shot(app, "language-\(language)")
+            app.terminate()
+        }
+    }
+
+    /// The App Store demo, once per store language (the app's 廣東話, 简体 and English): a first start, then the demo
+    /// conversation (testdata/demo) captioned live with the real model's answers (the stand-in replays every run and
+    /// alignment the app's loop made over it on a Mac, tools/demo-passes). The appstore workflow makes the store
+    /// screenshots from its shots (tools/storeart): the loop stops after two runs (CANTONESE_HOLD), one while only
+    /// Cantonese has been said, one once English is mixed in, each showing grey text.
     static let holds = (chinese: 90, mixed: 279)   // the runs in testdata/demo/demo-16k.passes.json
+    static let cantonese = ["-AppleLanguages", "(zh-Hant-HK)"]
     func testDemo() throws {
+        for (name, language) in [("zh-HK", "zh-Hant-HK"), ("zh-Hans", "zh-Hans-CN"), ("en", "en-HK")] {
+            try demo(name, language)
+        }
+    }
+
+    private func demo(_ name: String, _ language: String) throws {
         let app = XCUIApplication()
         app.launchEnvironment["CANTONESE_TEST_AUDIO"] = "demo"
         app.launchEnvironment["CANTONESE_HOLD"] = "\(Self.holds.chinese),\(Self.holds.mixed)"
-        app.launchArguments = ["-welcomed", "NO"]
+        app.launchArguments = ["-welcomed", "NO", "-AppleLanguages", "(\(language))"]
         app.launch()
         let go = app.buttons["continue"]
         XCTAssertTrue(go.waitForExistence(timeout: 10), "no welcome sheet")
         Thread.sleep(forTimeInterval: 3)
-        shot(app, "demo-welcome")
+        shot(app, "demo-welcome-\(name)")
         go.tap()
         Thread.sleep(forTimeInterval: 1)
         app.buttons["mic"].tap()
-        let ready = Date().addingTimeInterval(120)
-        while Date() < ready, status(app) != "聽緊" { Thread.sleep(forTimeInterval: 0.2) }
-        XCTAssertEqual(status(app), "聽緊")
+        XCTAssertTrue(wait(120) { state(app) == "listening" }, "never started listening (\(status(app)))")
         let transcript = app.staticTexts["transcript"]
-        for name in ["demo-chinese", "demo-mixed"] {
-            XCTAssertTrue(wait(60) { transcript.exists && transcript.value as? String == "held" }, "the loop didn't stop for \(name)")
+        for shotName in ["demo-chinese", "demo-mixed"] {
+            XCTAssertTrue(wait(60) { transcript.exists && transcript.value as? String == "held" }, "the loop didn't stop for \(shotName)")
             Thread.sleep(forTimeInterval: 0.5)   // the screen takes the newest lines every 0.1 s
-            shot(app, name)
-            print("\(name): \(transcript.label)")
+            shot(app, "\(shotName)-\(name)")
+            print("\(shotName)-\(name): \(transcript.label)")
             XCTAssertTrue(wait(30) { !transcript.exists || transcript.value as? String != "held" })
         }
         // The rest of the conversation and a second of silence, then Stop: one last run, everything black.
@@ -105,8 +123,9 @@ final class CantoneseUITests: XCTestCase {
         app.buttons["mic"].tap()
         Thread.sleep(forTimeInterval: 2)
         let text = transcript.label
-        print("DEMO TRANSCRIPT: \(text)")
+        print("DEMO TRANSCRIPT \(name): \(text)")
         for words in ["Central", "proposal", "send"] { XCTAssertTrue(text.contains(words), "demo captions missing \(words): \(text)") }
+        app.terminate()
     }
 
     private func wait(_ seconds: TimeInterval, until: () -> Bool) -> Bool {
@@ -119,6 +138,7 @@ final class CantoneseUITests: XCTestCase {
     }
 
     private func status(_ app: XCUIApplication) -> String { app.staticTexts["status"].label }
+    private func state(_ app: XCUIApplication) -> String { app.staticTexts["status"].value as? String ?? "" }
 
     private func shot(_ app: XCUIApplication, _ name: String) {
         let a = XCTAttachment(screenshot: app.screenshot())

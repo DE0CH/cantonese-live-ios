@@ -49,7 +49,7 @@ final class Worker: @unchecked Sendable {
     static let shortest = rate / 4                   // the model gets at least 0.25 s
     static let behind = 10 * rate                    // window - 8 s >= 10 s: the phone can't keep up
     static let contextChars = 100                    // older black text given as context
-    static let tooSlow = "部手機轉得唔夠快，跟唔上，停咗。"
+    static var tooSlow: String { String(localized: "部手機轉得唔夠快，跟唔上，停咗。") }
 
     static let modelId = "aufklarer/Qwen3-ASR-1.7B-MLX-5bit"
     static let alignerId = "aufklarer/Qwen3-ForcedAligner-0.6B-5bit"

@@ -51,7 +51,7 @@ final class Transcriber: ObservableObject {
     func start() {
         guard !isRunning else { return }
         // The button changes at the tap: listening at once once the model is in memory, the audio comes on behind it.
-        state = Worker.loaded ? .listening : .loading("載入模型…")
+        state = Worker.loaded ? .listening : .loading(String(localized: "載入模型…"))
         loadTask = Task {
             do {
                 let worker = try await Worker.shared()
@@ -69,11 +69,11 @@ final class Transcriber: ObservableObject {
             } catch is CancellationError {
                 return
             } catch {
-                fail("用唔到模型：\(error.localizedDescription)")
+                fail(String(localized: "用唔到模型：\(error.localizedDescription)"))
                 return
             }
             if !testAudio, !(await AVAudioApplication.requestRecordPermission()) {
-                fail("未有權限用咪：去「設定」>「廣東話字幕」開返")
+                fail(String(localized: "未有權限用咪：去「設定」>「廣東話字幕」開返"))
                 return
             }
             do {
@@ -83,7 +83,7 @@ final class Transcriber: ObservableObject {
             } catch is CancellationError {
                 return
             } catch {
-                fail("用唔到咪：\(error.localizedDescription)")
+                fail(String(localized: "用唔到咪：\(error.localizedDescription)"))
             }
         }
     }

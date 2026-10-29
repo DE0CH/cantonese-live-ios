@@ -76,6 +76,7 @@ struct ContentView: View {
                 .font(.footnote)
                 .foregroundStyle(isError ? Color.red : Color.secondary)
                 .accessibilityIdentifier("status")
+                .accessibilityValue(stateName)   // UI tests: the state whatever the language
             Button { t.isRunning ? t.stop() : t.start() } label: {
                 Group {
                     if isLoading { ProgressView().controlSize(.large).tint(.white) }
@@ -90,7 +91,7 @@ struct ContentView: View {
             .prominentGlass()
             .buttonBorderShape(.circle)
             .tint(t.isRunning ? .red : .accentColor)
-            .accessibilityLabel(isLoading ? "取消" : t.isRunning ? "停止" : "開始")
+            .accessibilityLabel(Text(isLoading ? "取消" : t.isRunning ? "停止" : "開始"))
             .accessibilityIdentifier("mic")
             .sensoryFeedback(.impact, trigger: t.isRunning)
         }
@@ -100,11 +101,19 @@ struct ContentView: View {
 
     private var isLoading: Bool { if case .loading = t.state { return true } else { return false } }
     private var isError: Bool { if case .failed = t.state { return true } else { return false } }
+    private var stateName: String {
+        switch t.state {
+        case .idle: return "idle"
+        case .loading: return "loading"
+        case .listening: return "listening"
+        case .failed: return "failed"
+        }
+    }
     private var statusText: String {
         switch t.state {
         case .idle: return " "
         case .loading(let m): return m
-        case .listening: return "聽緊"
+        case .listening: return String(localized: "聽緊")
         case .failed(let m): return m
         }
     }

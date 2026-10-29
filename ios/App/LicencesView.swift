@@ -10,13 +10,14 @@ struct LicencesView: View {
     }
 
     private let parts = [
-        Part(name: "Qwen3-ASR 1.7B", use: "語音辨識模型（Qwen 團隊；MLX 5-bit 版 aufklarer）", licence: "Apache 2.0", file: "Apache-2.0"),
-        Part(name: "speech-swift", use: "喺 iPhone 度行模型（soniqo）", licence: "Apache 2.0", file: "Apache-2.0"),
-        Part(name: "MLX Swift", use: "GPU 運算（Apple）", licence: "MIT", file: "MIT-mlx-swift"),
-        Part(name: "MLX", use: "GPU 運算（Apple）", licence: "MIT", file: "MIT-mlx"),
-        Part(name: "swift-transformers", use: "模型檔案（Hugging Face）", licence: "Apache 2.0", file: "Apache-2.0"),
-        Part(name: "SwiftyOpenCC", use: "轉香港繁體（DengXiang）", licence: "MIT", file: "MIT-SwiftyOpenCC"),
-        Part(name: "OpenCC", use: "轉香港繁體（BYVoid）", licence: "Apache 2.0", file: "Apache-2.0"),
+        Part(name: "Qwen3-ASR 1.7B", use: String(localized: "語音辨識模型（Qwen 團隊；MLX 5-bit 版 aufklarer）"), licence: "Apache 2.0", file: "Apache-2.0"),
+        Part(name: "speech-swift", use: String(localized: "喺 iPhone 度行模型（soniqo）"), licence: "Apache 2.0", file: "Apache-2.0"),
+        Part(name: "MLX Swift", use: String(localized: "GPU 運算（Apple）"), licence: "MIT", file: "MIT-mlx-swift"),
+        Part(name: "MLX", use: String(localized: "GPU 運算（Apple）"), licence: "MIT", file: "MIT-mlx"),
+        Part(name: "swift-transformers", use: String(localized: "模型檔案（Hugging Face）"), licence: "Apache 2.0", file: "Apache-2.0"),
+        Part(name: "SwiftyOpenCC", use: String(localized: "轉香港繁體（DengXiang）"), licence: "MIT", file: "MIT-SwiftyOpenCC"),
+        Part(name: "OpenCC", use: String(localized: "轉香港繁體（BYVoid）"), licence: "Apache 2.0", file: "Apache-2.0"),
+        Part(name: "Qwen3-ForcedAligner 0.6B", use: String(localized: "字詞時間對齊模型（Qwen 團隊；MLX 5-bit 版 aufklarer）"), licence: "Apache 2.0", file: "Apache-2.0"),
     ]
 
     /// The ICP filing number (Info.plist ICPFilingNumber, set in project.yml once issued); empty until then. Shown only

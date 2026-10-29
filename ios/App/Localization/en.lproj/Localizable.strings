@@ -1,0 +1,37 @@
+/* English, Hong Kong conventions (British spelling, Putonghua); keys are the app's 廣東話 strings. */
+
+"未有字幕" = "No captions yet";
+"撳個咪，講廣東話，字幕會即時出現。全部喺部手機度轉，唔使上網。" = "Tap the microphone and speak Cantonese; captions appear as you talk. Everything runs on your iPhone, no internet needed.";
+"廣東話字幕" = "Cantonese Captions";
+"關於" = "About";
+"清除" = "Clear";
+"開始" = "Start";
+"停止" = "Stop";
+"取消" = "Cancel";
+"聽緊" = "Listening";
+"載入模型…" = "Loading model…";
+"用唔到模型：%@" = "Couldn't load the model: %@";
+"未有權限用咪：去「設定」>「廣東話字幕」開返" = "No microphone access: turn it on in Settings > Cantonese Captions";
+"用唔到咪：%@" = "Couldn't use the microphone: %@";
+"部手機轉得唔夠快，跟唔上，停咗。" = "This iPhone isn't fast enough to keep up, so captions stopped.";
+"歡迎使用廣東話字幕" = "Welcome to Cantonese Captions";
+"即時字幕" = "Live captions";
+"講緊嗰句先用灰色顯示，講完就定稿。" = "What's being said shows in grey first, then settles.";
+"廣東話、英文、普通話" = "Cantonese, English, Putonghua";
+"混埋講都認得，用香港繁體字寫出嚟。" = "Recognised even when mixed, written in Hong Kong Traditional Chinese.";
+"全部喺手機度運行" = "Runs entirely on your iPhone";
+"語音模型喺 iPhone 本地運行，唔使上網。" = "The speech model runs on the iPhone itself, no internet needed.";
+"唔收集任何資料" = "No data collected";
+"聲音同文字都唔會離開部手機。" = "Audio and text never leave your phone.";
+"繼續" = "Continue";
+"全部喺部 iPhone 度轉，唔使上網：聲音同文字都唔會離開部手機。" = "Everything is processed on the iPhone, no internet needed: audio and text never leave the phone.";
+"備案" = "ICP filing";
+"開源元件" = "Open-source components";
+"完成" = "Done";
+"語音辨識模型（Qwen 團隊；MLX 5-bit 版 aufklarer）" = "Speech recognition model (Qwen team; MLX 5-bit by aufklarer)";
+"字詞時間對齊模型（Qwen 團隊；MLX 5-bit 版 aufklarer）" = "Word timing model (Qwen team; MLX 5-bit by aufklarer)";
+"喺 iPhone 度行模型（soniqo）" = "Runs the models on iPhone (soniqo)";
+"GPU 運算（Apple）" = "GPU computation (Apple)";
+"模型檔案（Hugging Face）" = "Model files (Hugging Face)";
+"轉香港繁體（DengXiang）" = "Conversion to Hong Kong Traditional (DengXiang)";
+"轉香港繁體（BYVoid）" = "Conversion to Hong Kong Traditional (BYVoid)";

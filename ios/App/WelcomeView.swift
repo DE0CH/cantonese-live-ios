@@ -33,7 +33,7 @@ struct WelcomeView: View {
         .interactiveDismissDisabled()
     }
 
-    private func row(_ symbol: String, _ title: String, _ text: String) -> some View {
+    private func row(_ symbol: String, _ title: LocalizedStringKey, _ text: LocalizedStringKey) -> some View {
         HStack(alignment: .top, spacing: 16) {
             Image(systemName: symbol)
                 .font(.title)

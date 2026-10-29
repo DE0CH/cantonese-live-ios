@@ -1,0 +1,3 @@
+/* 简体中文, formal written */
+"CFBundleDisplayName" = "广东话字幕";
+"NSMicrophoneUsageDescription" = "使用麦克风采集语音，并在本机实时转写为粤语字幕。";

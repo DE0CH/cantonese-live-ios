@@ -1,0 +1,3 @@
+/* 書面語, standard written Traditional Chinese */
+"CFBundleDisplayName" = "廣東話字幕";
+"NSMicrophoneUsageDescription" = "使用麥克風擷取語音，並在本機即時轉寫為廣東話字幕。";

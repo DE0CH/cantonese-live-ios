@@ -6,6 +6,7 @@ options:
   bundleIdPrefix: dev.de0ch
   deploymentTarget: { iOS: "18.0" }
   createIntermediateGroups: true
+  developmentLanguage: zh-HK   # the strings in the code are 廣東話; App/Localization has 書面語, 简体 and English
 packages:
   SpeechSwift:   # DE0CH's fork (branch cantonese-live) of soniqo/speech-swift: decoding from a prefix, text per token,
                  # the prompt's keys and values reused across calls

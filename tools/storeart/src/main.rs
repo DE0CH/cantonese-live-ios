@@ -261,12 +261,18 @@ fn stills(args: &HashMap<String, String>) {
     let hk = load_fonts(Path::new(&args["fonts"]), "HK");
     let sc = load_fonts(Path::new(&args["fonts"]), "SC");
     let (light, dark) = (Path::new(&args["light"]), Path::new(&args["dark"]));
-    let shots = [
-        ("1-captions", find_shot(light, "-demo-chinese.png")),
-        ("2-languages", find_shot(dark, "-demo-mixed.png")),
-        ("3-on-device", find_shot(light, "-demo-welcome.png")),
-    ];
     for locale in LOCALES {
+        // The app in the store page's language: 廣東話 for Traditional, 简体 for Simplified, English for English.
+        let app = match locale {
+            "zh-Hant" => "zh-HK",
+            "zh-Hans" => "zh-Hans",
+            _ => "en",
+        };
+        let shots = [
+            ("1-captions", find_shot(light, &format!("-demo-chinese-{app}.png"))),
+            ("2-languages", find_shot(dark, &format!("-demo-mixed-{app}.png"))),
+            ("3-on-device", find_shot(light, &format!("-demo-welcome-{app}.png"))),
+        ];
         let dir = Path::new(&args["out"]).join(locale);
         std::fs::create_dir_all(&dir).unwrap();
         let fonts = if locale == "zh-Hans" { &sc } else { &hk };
