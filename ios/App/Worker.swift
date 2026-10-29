@@ -299,14 +299,21 @@ final class Worker: @unchecked Sendable {
     }
 
     /// Where the black text so far ends in `text`: just after the longest end of `black` (at least 2 characters) that
-    /// `text` contains, or nil.
+    /// `text` contains, and any punctuation that follows it there, or nil. Punctuation and spaces don't count, as two
+    /// runs often differ only in them (「到。」 and 「到，」).
     static func meets(_ black: String, in text: [Character]) -> Int? {
-        let tail = Array(black.suffix(40))
-        guard tail.count >= Self.overlap, !text.isEmpty else { return nil }
-        for k in stride(from: tail.count, through: Self.overlap, by: -1) {
+        let skip = { (c: Character) in c.isPunctuation || c.isWhitespace }
+        let tail = Array(black.suffix(60).filter { !skip($0) }.suffix(40))
+        let at = text.indices.filter { !skip(text[$0]) }       // positions of the characters that count
+        let core = at.map { text[$0] }
+        guard tail.count >= overlap, !core.isEmpty else { return nil }
+        for k in stride(from: tail.count, through: overlap, by: -1) {
             let end = Array(tail[(tail.count - k)...])
-            if let i = (0...max(0, text.count - k)).first(where: { i in i + k <= text.count && Array(text[i..<(i + k)]) == end }) {
-                return i + k
+            guard k <= core.count else { continue }
+            if let i = (0...(core.count - k)).first(where: { Array(core[$0..<($0 + k)]) == end }) {
+                var j = at[i + k - 1] + 1
+                while j < text.count, skip(text[j]) { j += 1 }
+                return j
             }
         }
         return nil
