@@ -95,10 +95,10 @@ final class CantoneseUITests: XCTestCase {
         XCTAssertEqual(status(app), "聽緊")
         let transcript = app.staticTexts["transcript"]
         for name in ["demo-chinese", "demo-mixed"] {
-            XCTAssertTrue(wait(60) { transcript.value as? String == "held" }, "the loop didn't stop for \(name)")
+            XCTAssertTrue(wait(60) { transcript.exists && transcript.value as? String == "held" }, "the loop didn't stop for \(name)")
             shot(app, name)
             print("\(name): \(transcript.label)")
-            XCTAssertTrue(wait(30) { transcript.value as? String != "held" })
+            XCTAssertTrue(wait(30) { !transcript.exists || transcript.value as? String != "held" })
         }
         // The rest of the conversation, then a second of silence; the last line is finished soon after.
         Thread.sleep(forTimeInterval: 15)
