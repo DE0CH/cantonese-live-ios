@@ -50,7 +50,7 @@ for k in stride(from: 2, to: args.count, by: 2) {
         let took = ms(since: t0)
         let sum = audio.reduce(0, +)
         record.passes.runs.append(Run(audio: audio.count, sum: sum, context: context, start: start, text: text))
-        let kind = cache == nil ? "last (after Stop)" : "run"
+        let kind = cache == nil ? "last (after Stop)" : (start.isEmpty && audio.count == Worker.window ? "slide" : "run")
         var note = ""
         if let cache, cache.hits > hits {
             record.times["run (cached prompt)", default: []].append(took)

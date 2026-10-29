@@ -8,9 +8,12 @@ import Qwen3ASR
 /// `start` to now, at most 8 s. Whenever the model is free and at least 100 ms of audio has come in since the last run
 /// started, the model transcribes the window, continuing from the window's black text, with older black text as
 /// context. What this run and the last agree on is black; the rest is grey.
-/// Once the window holds 8 s it slides: its first 8/3 s of audio go, and so does the start of the black text that was
-/// said in them, estimated from how fast the window's text is being spoken (a little less than that, so the text the
-/// next run continues from starts just before the audio rather than after it). That text becomes context.
+/// Once the window holds 8 s it slides on 8/3 s, and the model transcribes the new window afresh (older black text as
+/// context, no start text). The two windows' texts are merged where they agree, as Hugging Face's ASR pipeline merges
+/// overlapping chunks: their longest common stretch (at least 2 characters) is text both windows heard. The old
+/// window's text up to the end of it is black, and the new window continues from its own text up to there; what follows
+/// in either is redone by later runs. If they share no such stretch, only the old window's black text stays and the new
+/// window starts from nothing.
 /// 10 s or more behind (the window waiting at over 18 s): the phone can't keep up and listening stops with an error.
 /// Stopping runs the model once more over what is left, all of it black.
 /// Black text is split into lines at the end of each sentence; the last line holds the unfinished black text and the grey.
@@ -41,7 +44,7 @@ final class Worker: @unchecked Sendable {
     static let rate = 16000
     static let window = 8 * rate                     // a run hears at most 8 s...
     static let step = window / 3                     // ...and a full window slides on 8/3 s
-    static let keep: Double = 0.8                    // of the black text estimated said in those 8/3 s, this much goes
+    static let overlap = 2                           // characters two windows' texts must share to be merged
     static let runEvery = rate / 10                  // a run at most every 100 ms of audio
     static let shortest = rate / 4                   // the model gets at least 0.25 s
     static let behind = 10 * rate                    // window - 8 s >= 10 s: the phone can't keep up
@@ -66,7 +69,7 @@ final class Worker: @unchecked Sendable {
         var grey = ""
         var dropped = false     // cleared away: nothing more shows
     }
-    private enum Kind: String { case run, last }
+    private enum Kind: String { case run, slide, last }
     private struct Job {
         let kind: Kind; let audio: [Float]; let context: String; let start: String; let cache: Qwen3PromptCache?
         let line: Open; let at: Int   // the window's start (samples since listening began)
@@ -82,7 +85,7 @@ final class Worker: @unchecked Sendable {
     private var lastRun = 0               // `heard` when the last run started
     private var black = ""                // black text said in the window: what a run continues from
     private var previous = ""             // the last run's text (it starts with `black`)
-    private var heardBy = 0               // samples the last run heard
+    private var before = ""               // a slide: the last text of the window before it
     private var context = ""              // black text before the window
     private let cache = Qwen3PromptCache()   // the prompt before the audio, kept while the context stays the same
     private var incoming: [Float] = []    // mic audio of a new session while the last one's last run waits
@@ -196,7 +199,7 @@ final class Worker: @unchecked Sendable {
     private func newSession() {
         open = Open()
         audio = []; heard = 0; start = 0; lastRun = 0
-        black = ""; previous = ""; heardBy = 0; context = ""
+        black = ""; previous = ""; before = ""; context = ""
     }
 
     /// Start the next run if the model is free: the last one after a stop, else a run over the window (sliding it first
@@ -218,10 +221,18 @@ final class Worker: @unchecked Sendable {
                 fallBehind()
                 return
             }
-            if audio.count >= Self.window { slide() }
             lastRun = heard
-            job = Job(kind: .run, audio: Array(audio.prefix(Self.window)), context: context, start: black, cache: cache,
-                      line: open, at: start)
+            if audio.count >= Self.window {
+                // The window moves on 8/3 s and the model hears the new one afresh.
+                before = previous
+                audio.removeFirst(Self.step)
+                start += Self.step
+                job = Job(kind: .slide, audio: Array(audio.prefix(Self.window)), context: context, start: "", cache: cache,
+                          line: open, at: start)
+            } else {
+                job = Job(kind: .run, audio: Array(audio.prefix(Self.window)), context: context, start: black, cache: cache,
+                          line: open, at: start)
+            }
         } else {
             for c in waiting { c.resume() }
             waiting = []
@@ -237,6 +248,7 @@ final class Worker: @unchecked Sendable {
                 busy = false
                 switch job.kind {
                 case .run: ran(job, text)
+                case .slide: slid(job, text)
                 case .last: finished(job, text)
                 }
                 passes += 1
@@ -263,29 +275,55 @@ final class Worker: @unchecked Sendable {
         open.black += agreed.dropFirst(black.count)
         black = agreed
         previous = text
-        heardBy = job.audio.count
         open.grey = String(text.dropFirst(black.count))
         splitSentences(open)
         show(open)
     }
 
-    /// The window moves on 8/3 s. The black text said in that audio goes with it, to the context: as much as the last
-    /// run's text, spread evenly over what it heard, puts in 8/3 s, times `keep` (so the next run's start text begins a
-    /// little before its audio, never after), and never inside an English word.
-    private func slide() {
-        let perSample = heardBy > 0 ? Double(previous.count) / Double(heardBy) : 0
-        var n = min(black.count, Int(perSample * Double(Self.step) * Self.keep))
-        let chars = Array(black)
-        let isWord = { (c: Character) in c.isASCII && (c.isLetter || c.isNumber) }
-        while n > 0, n < chars.count, isWord(chars[n - 1]), isWord(chars[n]) { n -= 1 }
-        let gone = String(chars[..<n])
-        Self.log.notice("slide: \(n) of \(chars.count) black chars to the context")
-        context = String((context + gone).suffix(Self.contextChars).drop { $0.isWhitespace })
-        black = String(chars[n...])
-        previous = String(previous.dropFirst(n))
-        heardBy = max(0, heardBy - Self.step)
-        audio.removeFirst(Self.step)
-        start += Self.step
+    /// A slide's run ended: merge the new window's text with the old one's where they agree (their longest common
+    /// stretch). The old text up to the end of it is black and its start, whose audio has gone, becomes context; the new
+    /// window continues from its own text up to there. No such stretch: the new window starts from nothing.
+    private func slid(_ job: Job, _ text: String) {
+        guard job.line === open, job.at == start else { return }
+        let old = Array(before), new = Array(text)
+        if let m = Self.longestCommon(old, new), m.length >= Self.overlap {
+            let end = m.a + m.length
+            if end > black.count { open.black += String(old[black.count..<end]) }
+            // Black text the old window had beyond the stretch stays black and is carried over.
+            let carried = end < black.count ? String(Array(black)[end...]) : ""
+            context = String((context + String(old[..<m.a])).suffix(Self.contextChars).drop { $0.isWhitespace })
+            black = String(new[..<(m.b + m.length)]) + carried
+            previous = carried.isEmpty ? text : black
+            open.grey = carried.isEmpty ? String(new[(m.b + m.length)...]) : ""
+            Self.log.notice("slide merged on \(m.length) chars: \(m.a) of the old window's \(old.count) went to the context")
+        } else {
+            context = String((context + black).suffix(Self.contextChars).drop { $0.isWhitespace })
+            black = ""
+            previous = text
+            open.grey = text
+            Self.log.notice("slide without agreement: the new window starts from nothing")
+        }
+        splitSentences(open)
+        show(open)
+    }
+
+    /// The longest stretch two texts have in common: where it starts in each, and its length (characters, ignoring
+    /// case). Nil if they share nothing.
+    static func longestCommon(_ a: [Character], _ b: [Character]) -> (a: Int, b: Int, length: Int)? {
+        guard !a.isEmpty, !b.isEmpty else { return nil }
+        let same = { (x: Character, y: Character) in x == y || x.lowercased() == y.lowercased() }
+        var row = [Int](repeating: 0, count: b.count + 1)
+        var best: (a: Int, b: Int, length: Int)?
+        for i in 1...a.count {
+            var prev = 0
+            for j in 1...b.count {
+                let keep = row[j]
+                row[j] = same(a[i - 1], b[j - 1]) ? prev + 1 : 0
+                if row[j] > (best?.length ?? 0) { best = (i - row[j], j - row[j], row[j]) }
+                prev = keep
+            }
+        }
+        return best
     }
 
     /// The longest common start of two runs' texts, never inside an English word and never shorter than `atLeast`
@@ -367,7 +405,8 @@ final class Worker: @unchecked Sendable {
     /// Show the text a run is writing, once its grey is at least as long as the grey it replaces (no flicker).
     private func showPartial(_ job: Job, _ sofar: String) {
         let line = job.line
-        guard line === open || job.kind == .last, !line.dropped, sofar.hasPrefix(job.start) else { return }
+        // A slide's run writes the new window afresh, black text included: it shows once merged.
+        guard job.kind != .slide, line === open || job.kind == .last, !line.dropped, sofar.hasPrefix(job.start) else { return }
         let grey = String(sofar.dropFirst(job.start.count))
         guard grey.count >= line.grey.count else { return }
         line.grey = grey
