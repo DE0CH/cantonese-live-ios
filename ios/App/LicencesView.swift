@@ -1,3 +1,4 @@
+import StoreKit
 import SwiftUI
 
 /// The open-source parts the app ships with (the models and the libraries around them) and their licence texts, which
@@ -18,6 +19,11 @@ struct LicencesView: View {
         Part(name: "OpenCC", use: "轉香港繁體（BYVoid）", licence: "Apache 2.0", file: "Apache-2.0"),
     ]
 
+    /// The ICP filing number (Info.plist ICPFilingNumber, set in project.yml once issued); empty until then. Shown only
+    /// to China mainland App Store accounts (the storefront, cached by iOS, so offline too): only that store needs it.
+    private let filing = Bundle.main.object(forInfoDictionaryKey: "ICPFilingNumber") as? String ?? ""
+    @State private var mainland = false
+
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
@@ -25,6 +31,13 @@ struct LicencesView: View {
             List {
                 Section {
                     Text("全部喺部 iPhone 度轉，唔使上網：聲音同文字都唔會離開部手機。")
+                }
+                if mainland, !filing.isEmpty {
+                    // China mainland's ICP app filing: the number, with the MIIT lookup right below it, as the rules ask.
+                    Section("備案") {
+                        Text(filing).textSelection(.enabled)
+                        Link("beian.miit.gov.cn", destination: URL(string: "https://beian.miit.gov.cn/")!)
+                    }
                 }
                 Section("開源元件") {
                     ForEach(parts) { p in
@@ -44,6 +57,7 @@ struct LicencesView: View {
                     }
                 }
             }
+            .task { mainland = await Storefront.current?.countryCode == "CHN" }
             .navigationTitle("關於")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { Button("完成") { dismiss() }.accessibilityIdentifier("done") }

@@ -1,4 +1,4 @@
-// replay MODEL_DIR CLIP.wav OUT.json
+// demo-passes MODEL_DIR CLIP.wav OUT.json
 //   MODEL_DIR: the app's model folder (ios/Model/asr from ios/fetch-model.sh)
 //   OUT.json:  [{audio, sum, start, text}], one per model job: the audio's length and sum, the text it started from and
 //              the model's answer (testdata/demo/demo-16k.passes.json for the demo)
@@ -7,7 +7,7 @@ import Qwen3ASR
 
 let args = CommandLine.arguments
 guard args.count == 4, let wav = FileManager.default.contents(atPath: args[2]), let samples = Worker.samples(wav: wav) else {
-    FileHandle.standardError.write("usage: replay MODEL_DIR CLIP.wav OUT.json\n".data(using: .utf8)!)
+    FileHandle.standardError.write("usage: demo-passes MODEL_DIR CLIP.wav OUT.json\n".data(using: .utf8)!)
     exit(2)
 }
 

@@ -177,7 +177,7 @@ final class Transcriber: ObservableObject {
 /// A bundled 16 kHz mono clip the UI tests stream instead of the microphone, and for the simulator's stand-in model
 /// what the real model said: for the test clip, per line (testdata/cantonese-16k.json, from the model-check workflow);
 /// for the App Store demo, every pass the app's loop made over it with the real model on a Mac
-/// (testdata/demo/demo-16k.passes.json, from tools/replay in the model-check workflow).
+/// (testdata/demo/demo-16k.passes.json, from tools/demo-passes in the model-check workflow).
 struct TestClip {
     struct Line: Decodable { let start: Double; let end: Double; let text: String }
     struct Pass: Decodable { let audio: Int; let sum: Float; let start: String; let text: String }

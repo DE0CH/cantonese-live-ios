@@ -71,6 +71,8 @@ targets:
         GCSupportsGameMode: false
         UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
         LSRequiresIPhoneOS: true
+        # China mainland ICP app filing number, shown on the 關於 page with the MIIT lookup link; empty until issued.
+        ICPFilingNumber: ""
   CantoneseUITests:
     type: bundle.ui-testing
     platform: iOS
