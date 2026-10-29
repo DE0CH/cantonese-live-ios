@@ -1,7 +1,7 @@
 # Loads the App Store listing into App Store Connect from fastlane/metadata and fastlane/screenshots (the appstore
 # workflow makes the screenshots from the replica with tools/storeart): text, categories, age rating, screenshots, then
-# free pricing, availability everywhere except China mainland (an app sold there needs an MIIT filing) and the
-# content-rights answer, which deliver doesn't set. Releases automatically once approved (Deyao, 2026-10-29). Never submits for review.
+# free pricing, availability everywhere (China mainland too: the app has no server, so no ICP filing unless Apple asks
+# for one; Deyao, 2026-10-29) and the content-rights answer, which deliver doesn't set. Releases automatically once approved (Deyao, 2026-10-29). Never submits for review.
 default_platform(:ios)
 
 platform :ios do
@@ -39,10 +39,9 @@ platform :ios do
     if existing
       avail = client.get("v2/appAvailabilities/#{existing['id']}/territoryAvailabilities", { limit: 200, include: "territory" }).body["data"]
       avail.each do |ta|
-        want = ta["relationships"]&.dig("territory", "data", "id") != "CHN"
-        next if ta["attributes"]["available"] == want
+        next if ta["attributes"]["available"]
         client.patch("v1/territoryAvailabilities/#{ta['id']}",
-                     { data: { type: "territoryAvailabilities", id: ta["id"], attributes: { available: want } } })
+                     { data: { type: "territoryAvailabilities", id: ta["id"], attributes: { available: true } } })
       end
     else
       client.post("v2/appAvailabilities", {
@@ -50,10 +49,10 @@ platform :ios do
           app: { data: { type: "apps", id: app.id } },
           territoryAvailabilities: { data: territories.map { |t| { type: "territoryAvailabilities", id: "${#{t}}" } } } } },
         included: territories.map { |t|
-          { type: "territoryAvailabilities", id: "${#{t}}", attributes: { available: t != "CHN" },
+          { type: "territoryAvailabilities", id: "${#{t}}", attributes: { available: true },
             relationships: { territory: { data: { type: "territories", id: t } } } } } })
     end
-    UI.success("Available in #{territories.size - 1} territories (not CHN)")
+    UI.success("Available in all #{territories.size} territories")
   end
 
   # App Privacy has no API-key endpoint: this runs with an Apple ID session (FASTLANE_SESSION, FASTLANE_USER) from a
