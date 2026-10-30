@@ -1,5 +1,9 @@
 import Foundation
-import SherpaOnnx
+#if canImport(SherpaOnnxShared)
+import SherpaOnnxShared   // the app: sherpa-onnx's dynamic frameworks (static ones get embedded unsigned and fail the export)
+#else
+import SherpaOnnx         // tools/demo-passes on a Mac
+#endif
 #if !targetEnvironment(simulator)
 import MLX
 import Qwen3ASR

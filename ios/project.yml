@@ -52,7 +52,7 @@ targets:
       - package: SpeechSwift
         product: Qwen3ASR
       - package: SherpaOnnx
-        product: sherpa-onnx
+        product: sherpa-onnx-shared   # dynamic: the static frameworks got embedded and failed signing at export
       - package: MLX
         product: MLX
       - package: SwiftyOpenCC
