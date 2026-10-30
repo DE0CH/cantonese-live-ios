@@ -1,8 +1,8 @@
 import XCTest
 
 /// The phone replica: walks every flow on the simulator, streaming the bundled Cantonese clip instead of the mic. The
-/// simulator can't run MLX, so a stand-in answers for the models (Transcriber.swift); the loop, OpenCC and the UI
-/// are real.
+/// simulator can't run MLX, so a stand-in answers for Qwen3-ASR (Transcriber.swift); the loop, Silero, SenseVoice,
+/// OpenCC and the UI are real.
 final class CantoneseUITests: XCTestCase {
     func testEveryFlow() throws {
         let app = XCUIApplication()
@@ -28,14 +28,14 @@ final class CantoneseUITests: XCTestCase {
         XCTAssertEqual(status(app), "聽緊", "never started listening (\(status(app)))")
         shot(app, "listening")
 
-        // The 7.5 s clip (and a second of silence) goes through the 8 s windows: grey while it plays, an agreement run every 2.67 s from 2.67 s.
+        // The 8.5 s clip (two sentences, then a second of silence): grey while each is spoken, black after each.
         let transcript = app.staticTexts["transcript"]
         XCTAssertTrue(wait(60) { transcript.exists && transcript.label.contains("我哋") }, "no captions (\(status(app)))")
         shot(app, "transcribed")
         XCTAssertTrue(wait(60) { loop(transcript).hasPrefix("played") }, "the clip didn't finish playing")
         XCTAssertFalse(loop(transcript).contains("unrecorded"), "the stand-in missed runs: regenerate the recordings")
 
-        app.buttons["mic"].tap()                  // 停止: one last run, everything black
+        app.buttons["mic"].tap()                  // 停止: everything black
         XCTAssertTrue(app.buttons["開始"].waitForExistence(timeout: 10), "stop didn't stop")
         Thread.sleep(forTimeInterval: 1)
         let text = transcript.exists ? transcript.label : ""
@@ -88,9 +88,9 @@ final class CantoneseUITests: XCTestCase {
     /// The App Store demo, once per store language (the app's 廣東話, 简体 and English): a first start, then the demo
     /// conversation (testdata/demo) captioned live with the real model's answers (the stand-in replays every run
     /// the app's loop made over it on a Mac, tools/demo-passes). The appstore workflow makes the store
-    /// screenshots from its shots (tools/storeart): the loop stops after two runs (CANTONESE_HOLD), one while only
-    /// Cantonese has been said, one once English is mixed in, each showing grey text.
-    static let holds = (chinese: 113, mixed: 285)   // the runs in testdata/demo/demo-16k.passes.json
+    /// screenshots from its shots (tools/storeart): the clip stops twice (CANTONESE_HOLD, seconds into it), in the second
+    /// sentence (only Cantonese said so far) and in the last (after English was mixed in), each showing grey text.
+    static let holds = (chinese: 7.0, mixed: 27.0)
     static let cantonese = ["-AppleLanguages", "(zh-Hant-HK)"]
     func testDemo() throws {
         for (name, language) in [("zh-HK", "zh-Hant-HK"), ("zh-Hans", "zh-Hans-CN"), ("en", "en-HK")] {
@@ -121,7 +121,7 @@ final class CantoneseUITests: XCTestCase {
             print("\(shotName)-\(name): \(transcript.label)")
             XCTAssertTrue(wait(30) { !transcript.exists || !loop(transcript).hasPrefix("held") })
         }
-        // The rest of the conversation and a second of silence, then Stop: one last run, everything black.
+        // The rest of the conversation and a second of silence, then Stop: everything black.
         XCTAssertTrue(wait(120) { loop(transcript).hasPrefix("played") }, "the demo didn't finish playing")
         app.buttons["mic"].tap()
         Thread.sleep(forTimeInterval: 2)

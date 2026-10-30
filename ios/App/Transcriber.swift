@@ -2,15 +2,12 @@ import AVFoundation
 import Foundation
 import OpenCC
 import os
-import Qwen3ASR
 import UIKit
 
-/// Transcribes on the phone: Qwen3-ASR 1.7B (5-bit, aufklarer/Qwen3-ASR-1.7B-MLX-5bit) on the GPU through MLX, via
-/// speech-swift. Nothing leaves the phone. iOS allows no GPU work in the background, so it works with the app on
-/// screen: the screen stays awake while listening, and leaving the app stops it.
-///
-/// The model runs all the time, with no speech detection in front of it, over overlapping 8 s windows of the mic's
-/// 16 kHz audio (Worker): what two windows in a row agree on turns black, and runs in between fill in the grey.
+/// Transcribes on the phone (Worker): Silero cuts the mic's 16 kHz audio at pauses, SenseVoice writes the grey text
+/// while someone speaks (CPU), Qwen3-ASR 1.7B writes each finished stretch in black (GPU). Nothing leaves the phone. iOS
+/// allows no GPU work in the background, so it works with the app on screen: the screen stays awake while listening,
+/// and leaving the app stops it.
 @MainActor
 final class Transcriber: ObservableObject {
     enum State: Equatable { case idle, loading(String), listening, failed(String) }
@@ -18,11 +15,11 @@ final class Transcriber: ObservableObject {
     /// What has been said since the last clear, one line per segment, oldest first.
     @Published var lines: [Worker.Line] = []
     @Published var state: State = .idle
-    /// UI tests: the loop is stopped at a run for a screenshot (Worker.holdAfter, from CANTONESE_HOLD).
+    /// UI tests: the clip is stopped for a screenshot (CANTONESE_HOLD).
     @Published var held = false
     /// UI tests: the whole test clip has gone in and the loop has caught up.
     @Published var played = false
-    /// UI tests: the stand-in was asked for a run the recording doesn't have (TestClip.misses).
+    /// UI tests: the stand-in was asked for a black run the recording doesn't have (TestClip.misses).
     @Published var unrecorded = false
 
     var isRunning: Bool {
@@ -72,16 +69,7 @@ final class Transcriber: ObservableObject {
                     self?.lines = lines
                     if test { self?.unrecorded = TestClip.misses.count > 0 }
                 }
-                let clip = testClip
-                worker.configure(
-                    onUpdate: { latest.send($0) },
-                    onHold: { [weak self] held in
-                        Task { @MainActor in self?.held = held }
-                    },
-                    onFail: { [weak self] message in
-                        Task { @MainActor in self?.fail(message) }
-                    },
-                    holdAfter: clip?.holdAfter ?? [], holdFor: 8)
+                worker.configure(onUpdate: { latest.send($0) })
                 worker.begin()
                 self.worker = worker
             } catch is CancellationError {
@@ -245,7 +233,9 @@ final class Transcriber: ObservableObject {
         played = false
         Worker.log.notice("test audio starts")
         filePlayback = Task { [weak self] in
-            await worker.play(clip.samples, pace: true)
+            await worker.play(clip.samples, pace: true, holds: clip.holds, holdFor: 8) { held in
+                Task { @MainActor in self?.held = held }
+            }
             if !Task.isCancelled {
                 self?.unrecorded = TestClip.misses.count > 0
                 self?.played = true
@@ -254,18 +244,15 @@ final class Transcriber: ObservableObject {
     }
 }
 
-/// A bundled 16 kHz mono clip the UI tests stream instead of the microphone, with every model call the app's loop made
-/// over it with the real model on a Mac (testdata/…passes.json, from tools/demo-passes in the model-check
-/// workflow): the simulator's stand-in answers with them.
+/// A bundled 16 kHz mono clip the UI tests stream instead of the microphone, with every black run the app's loop made
+/// over it with the real models on a Mac (testdata/…passes.json, from tools/demo-passes in the model-check workflow):
+/// the simulator's stand-in for Qwen3-ASR answers with them. Silero and SenseVoice run for real in the simulator.
 struct TestClip: Sendable {
-    /// One call: its kind ("grey", "agree" or "last"), the audio's length and sum, what it was given, the answer.
-    struct Run: Codable, Sendable {
-        let kind: String; let audio: Int; let sum: Float; let context: String; let prefix: String; let text: String
-    }
-    /// The calls, and every text trimmed to be continued from (Worker.Model.trim) with what it became.
-    struct Passes: Codable, Sendable { var runs: [Run] = []; var trims: [String: String] = [:] }
-    /// Calls the stand-in had no recorded answer for: the loop went another way than on the Mac (the recordings are
-    /// out of date), which the UI tests fail on.
+    /// One black run: the stretch's length and sum, the context it was given, the answer.
+    struct Run: Codable, Sendable { let audio: Int; let sum: Float; let context: String; let text: String }
+    struct Passes: Codable, Sendable { var runs: [Run] = [] }
+    /// Black runs the stand-in had no recorded answer for: the loop went another way than on the Mac (the recordings
+    /// are out of date), which the UI tests fail on.
     final class Misses: @unchecked Sendable {
         private let lock = NSLock()
         private var n = 0
@@ -275,9 +262,9 @@ struct TestClip: Sendable {
     static let misses = Misses()
     let samples: [Float]
     let passes: Passes
-    /// CANTONESE_HOLD: the runs (comma-separated, counted from 1) to stop at for a screenshot.
-    var holdAfter: Set<Int> {
-        Set((ProcessInfo.processInfo.environment["CANTONESE_HOLD"] ?? "").split(separator: ",").compactMap { Int($0) })
+    /// CANTONESE_HOLD: the seconds of the clip (comma-separated) to stop at for a screenshot.
+    var holds: [Double] {
+        (ProcessInfo.processInfo.environment["CANTONESE_HOLD"] ?? "").split(separator: ",").compactMap { Double($0) }
     }
 
     /// CANTONESE_TEST_AUDIO: "1" streams the short test clip, "demo" the App Store demo conversation.
@@ -295,63 +282,31 @@ struct TestClip: Sendable {
         }
     }
 
-    /// The simulator's stand-in for the model: the real model's answers to these very calls (same kind, audio, context
-    /// and prefix). An agreement run finishes in its one step.
-    static func standIn(_ passes: Passes) -> Worker.Model {
-        let answer = { (kind: String, audio: [Float], context: String, prefix: String) -> String? in
+    /// The simulator's stand-in for Qwen3-ASR: the real model's answer to this very run (same stretch and context).
+    static func standIn(_ passes: Passes) -> (_ audio: [Float], _ context: String) throws -> String {
+        { audio, context in
             let sum = audio.reduce(0, +)
-            guard let r = passes.runs.first(where: {
-                $0.kind == kind && $0.audio == audio.count && $0.sum == sum && $0.context == context && $0.prefix == prefix
-            }) else {
-                Worker.log.error("\(kind, privacy: .public) run not recorded: \(audio.count) samples from \(prefix.count) chars")
+            guard let r = passes.runs.first(where: { $0.audio == audio.count && $0.sum == sum && $0.context == context }) else {
+                Worker.log.error("black run not recorded: \(audio.count) samples after 「\(context, privacy: .public)」")
                 misses.add()
-                return nil
+                return ""
             }
             return r.text
         }
-        return Worker.Model(
-            grey: { audio, context, prefix, _, _, onText in
-                guard let text = answer("grey", audio, context, prefix) else { return prefix }
-                onText(text)
-                return text
-            },
-            agreement: { audio, context in ReplayedRun(answer("agree", audio, context, "") ?? "") },
-            last: { audio, context, _, onText in
-                guard let text = answer("last", audio, context, "") else { return "" }
-                onText(text)
-                return text
-            },
-            trim: { text in
-                passes.trims[text] ?? String(Worker.withoutEndPunctuation(text).dropLast())
-            })
-    }
-}
-
-/// An agreement run of the stand-in: the recorded text, after one step.
-private final class ReplayedRun: AgreementRun {
-    private let answer: String
-    private(set) var finished = false
-    var text: String { finished ? answer : "" }
-    var reuses: Int { 0 }
-    init(_ answer: String) { self.answer = answer }
-    func step() throws -> Bool {
-        finished = true
-        return true
     }
 }
 
 extension Worker {
     @MainActor private static var cached: Worker?
     @MainActor private static var loading: Task<Worker, Error>?
-    nonisolated(unsafe) private static var cacheCap: AnyObject?   // held for as long as the app runs (set by the one load)
-    /// The model is in memory: starting again is immediate.
+    /// The models are in memory: starting again is immediate.
     @MainActor static var loaded: Bool { cached != nil }
 
     /// The app went to the background or came back: see `suspend`.
     @MainActor static func suspendAll(_ on: Bool) { cached?.suspend(on) }
 
-    /// Loads the model shipped inside the app (ios/fetch-model.sh puts them in Model/) once and keeps them. One load at
-    /// a time: a start after a cancelled one waits for the load under way (which a cancel doesn't stop).
+    /// Loads the models shipped inside the app (ios/fetch-model.sh puts them in Model/) once and keeps them. One load
+    /// at a time: a start after a cancelled one waits for the load under way (which a cancel doesn't stop).
     @MainActor static func shared() async throws -> Worker {
         if let w = cached { return w }
         let task = loading ?? Task.detached { try await Worker.load() }
@@ -372,24 +327,23 @@ extension Worker {
             throw CocoaError(.fileNoSuchFile)
         }
         #if targetEnvironment(simulator)
-        // The simulator has no Metal for MLX, so the UI tests run everything but the models, with this stand-in for
-        // them: the real model's answers to these very calls (TestClip.standIn).
-        _ = dir
-        let model = TestClip.standIn(TestClip.current?.passes ?? TestClip.Passes())
+        let models = try await Models.load(dir, black: TestClip.standIn(TestClip.current?.passes ?? TestClip.Passes()))
         #else
-        let qwen = try await Qwen3ASRModel.fromPretrained(
-            modelId: modelId, cacheDir: dir.appendingPathComponent("asr"), offlineMode: true)
-        let model = Worker.model(qwen)
-        cacheCap = Qwen3ASRMLXMemory.limitCache(to: cacheLimit)
+        let models = try await Models.load(dir)
         #endif
+        // Grey and black runs convert on their own queues; OpenCC's converter is used by one at a time.
         let converter = try ChineseConverter(options: [.traditionalize, .hkStandard])
-        log.notice("model loaded, \(Worker.memory(), privacy: .public)")
-        return Worker(model: model, convert: { converter.convert($0) })
+        let lock = NSLock()
+        log.notice("models loaded")
+        return Worker(models: models, convert: { text in
+            lock.lock(); defer { lock.unlock() }
+            return converter.convert(text)
+        })
     }
 }
 
-/// Hands the newest value to the main thread at most every 0.1 s. The model writes a token at a time, and laying out the
-/// whole transcript that often kept the main thread too busy to show a tap.
+/// Hands the newest value to the main thread at most every 0.1 s, so laying out the transcript never keeps the main
+/// thread too busy to show a tap.
 final class Latest<Value>: @unchecked Sendable {
     private let lock = NSLock()
     private var value: Value?

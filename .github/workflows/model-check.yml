@@ -1,13 +1,13 @@
-# Runs the app's model (aufklarer/Qwen3-ASR-1.7B-MLX-5bit, Qwen3-ASR 1.7B on MLX) on a macOS runner with speech-swift's
-# own CLI at the app's pinned revision: transcribes the test clip and prints the text and timing; then runs the app's loop
-# over the App Store demo (tools/demo-passes). The iPhone simulator can't run MLX (no Metal), so this is where CI hears the
-# model.
+# Runs the app's Qwen3-ASR (aufklarer/Qwen3-ASR-1.7B-MLX-5bit on MLX) on a macOS runner with speech-swift's own CLI at
+# the app's pinned revision: transcribes the test clip and prints the text and timing; then runs the app's loop with all
+# its real models over the test clip and the App Store demo (tools/demo-passes). The iPhone simulator can't run MLX (no
+# Metal), so this is where CI hears Qwen3-ASR.
 name: model-check
 on:
   workflow_dispatch:
   push:
     branches: [main]
-    paths: ["ios/project.yml", "ios/fetch-model.sh", "ios/App/Worker.swift", "tools/demo-passes/**", "testdata/**",
+    paths: ["ios/project.yml", "ios/fetch-model.sh", "ios/App/Worker.swift", "ios/App/Models.swift", "tools/demo-passes/**", "testdata/**",
             ".github/workflows/model-check.yml"]
 permissions: { contents: read }
 jobs:
@@ -33,12 +33,9 @@ jobs:
           time "$BIN" transcribe "$GITHUB_WORKSPACE/testdata/cantonese-16k.wav" --engine qwen3 -m aufklarer/Qwen3-ASR-1.7B-MLX-5bit 2>&1 | tail -15 | tee out.txt
           grep -q "我哋" out.txt
       - name: The app's loop over the test clip and the demo conversation with the real models (tools/demo-passes)
-        # Every model run it makes goes in the artifact (cantonese-16k.passes.json, demo-16k.passes.json):
-        # committed to testdata, they are what the simulator's stand-in answers in the UI tests and the App Store demo.
-        # The log shows the screen after each run, the final transcripts, the timings and three checks (any difference
-        # fails the step): every run that reused an agreement run's first 8 s is run again with nothing reused, every grey
-        # run that reused the cached prompt is run again without the cache, and every agreement run (taken in steps) is
-        # run again as one plain call.
+        # Every black run it makes goes in the artifact (cantonese-16k.passes.json, demo-16k.passes.json): committed to
+        # testdata, they are what the simulator's stand-in for Qwen3-ASR answers in the UI tests and the App Store demo.
+        # The log shows each black run, the final transcripts and the time spent on the CPU and the GPU.
         run: |
           REV=$(awk '/SpeechSwift:/{f=1} f&&/revision:/{print $2; exit}' ios/project.yml)
           grep -q "$REV" tools/demo-passes/Package.swift || { echo "tools/demo-passes pins another speech-swift than ios/project.yml"; exit 1; }

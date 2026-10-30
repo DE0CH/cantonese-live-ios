@@ -13,7 +13,6 @@
 "用唔到模型：%@" = "Couldn't load the model: %@";
 "未有權限用咪：去「設定」>「廣東話字幕」開返" = "No microphone access: turn it on in Settings > Cantonese Captions";
 "用唔到咪：%@" = "Couldn't use the microphone: %@";
-"部手機轉得唔夠快，跟唔上，停咗。" = "This iPhone isn't fast enough to keep up, so captions stopped.";
 "歡迎使用廣東話字幕" = "Welcome to Cantonese Captions";
 "即時字幕" = "Live captions";
 "講緊嗰句先用灰色顯示，講完就定稿。" = "What's being said shows in grey first, then settles.";
@@ -33,3 +32,7 @@
 "模型檔案（Hugging Face）" = "Model files (Hugging Face)";
 "轉香港繁體（DengXiang）" = "Conversion to Hong Kong Traditional (DengXiang)";
 "轉香港繁體（BYVoid）" = "Conversion to Hong Kong Traditional (BYVoid)";
+"灰色字幕嘅語音辨識模型（阿里巴巴 FunAudioLLM）" = "Speech recognition model for the grey captions (Alibaba FunAudioLLM)";
+"聽邊段係講嘢（Silero）" = "Detects when someone is speaking (Silero)";
+"喺 iPhone 度行 SenseVoice 同 Silero（k2-fsa）" = "Runs SenseVoice and Silero on the iPhone (k2-fsa)";
+"CPU 運算（Microsoft）" = "CPU computation (Microsoft)";

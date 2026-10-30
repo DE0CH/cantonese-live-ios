@@ -20,7 +20,7 @@ App record 6826497735, bundle `dev.de0ch.cantonese`, version 1.0, the newest Tes
 | Support URL | https://github.com/DE0CH/cantonese-live-ios/issues |
 | App privacy | Data Not Collected |
 | Encryption | None (`ITSAppUsesNonExemptEncryption` = false) |
-| Content rights | Contains third-party content: yes (Qwen3-ASR, Apache 2.0) |
+| Content rights | Contains third-party content: yes (Qwen3-ASR, Apache 2.0; SenseVoice-Small, FunASR Model License; Silero VAD, MIT) |
 | Sign-in for review | Not needed |
 
 ## Listing text
@@ -30,15 +30,16 @@ Description, keywords, promotional text, subtitle and name per localization live
 
 ## Review notes
 
-The app transcribes speech on the device with Qwen3-ASR 1.7B (MLX, on the GPU) and makes no network requests. Tap the
-microphone button and speak Cantonese (or play a Cantonese video near the phone); captions appear while you speak and refresh as
-often as the phone keeps up (at most every 0.5 s); every few seconds a line is finished. Loading the model takes a few seconds on the first tap.
+The app transcribes speech on the device and makes no network requests: Silero VAD finds speech, SenseVoice-Small (CPU)
+writes grey captions while someone speaks (refreshed at most every 0.5 s), and Qwen3-ASR 1.7B (MLX, on the GPU) writes
+each sentence in black once the speaker pauses. Nothing runs in silence. Loading the models takes a few seconds on the
+first tap.
 iOS does not allow GPU work in the background, so leaving the app stops listening. No account is needed.
 
 ## Devices
 
 Only iPhones with 8 GB of memory: `UIRequiredDeviceCapabilities` `iphone-performance-gaming-tier` (iPhone 15 Pro and
-later, every iPhone 16 and 17). The model needs about 2.4 GB, and an app that may run out of memory on older phones is
+later, every iPhone 16 and 17). The models need about 2.7 GB, and an app that may run out of memory on older phones is
 not offered there at all (Deyao, 2026-10-28). Apple does not let a later update drop a required capability's users the
 other way round, so this floor can only be lowered, not raised, after release.
 
@@ -50,5 +51,5 @@ and dark, the welcome sheet, 關於).
 
 ## Licences
 
-The 關於 sheet (ⓘ, top left) lists every open-source part shipped (Qwen3-ASR and speech-swift, swift-transformers,
-OpenCC: Apache 2.0; MLX, MLX Swift, SwiftyOpenCC: MIT) with its licence text (`ios/App/Licences/`).
+The 關於 sheet (ⓘ, top left) lists every open-source part shipped (Qwen3-ASR, speech-swift, sherpa-onnx, swift-transformers,
+OpenCC: Apache 2.0; SenseVoice-Small: FunASR Model License; Silero VAD, ONNX Runtime, MLX, MLX Swift, SwiftyOpenCC: MIT) with its licence text (`ios/App/Licences/`).

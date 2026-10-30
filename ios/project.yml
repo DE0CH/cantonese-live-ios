@@ -1,6 +1,6 @@
 # XcodeGen spec (CI runs `xcodegen generate`; the .xcodeproj is not committed). The app transcribes on the phone
-# (Qwen3-ASR 1.7B on the GPU through MLX, shipped inside the app: `./fetch-model.sh` puts it in Model/
-# first), so it has no server and no secrets.
+# (Silero and SenseVoice on the CPU through sherpa-onnx, Qwen3-ASR 1.7B on the GPU through MLX, shipped inside the app:
+# `./fetch-model.sh` puts them in Model/ first), so it has no server and no secrets.
 name: Cantonese
 options:
   bundleIdPrefix: dev.de0ch
@@ -8,10 +8,15 @@ options:
   createIntermediateGroups: true
   developmentLanguage: zh-HK   # the strings in the code are 廣東話; App/Localization has 書面語, 简体 and English
 packages:
-  SpeechSwift:   # DE0CH's fork (branch cantonese-live) of soniqo/speech-swift: decoding from a prefix, text per token,
-                 # the prompt's keys and values reused across calls
-    url: https://github.com/DE0CH/speech-swift
-    revision: a0939540a4dec73da940dc0006572d877258ba54
+  SpeechSwift:   # upstream soniqo/speech-swift (Qwen3-ASR on MLX)
+    url: https://github.com/soniqo/speech-swift
+    revision: d53bcb333882ebbd7444ae059b270127565594a0
+  SherpaOnnx:    # Silero and SenseVoice on the CPU (ONNX Runtime)
+    url: https://github.com/k2-fsa/sherpa-onnx
+    exactVersion: 2.0.1
+  MLX:           # the version speech-swift resolves; the app only sets MLX's buffer cache limit
+    url: https://github.com/ml-explore/mlx-swift
+    from: 0.30.0
   SwiftyOpenCC:
     url: https://github.com/ddddxxx/SwiftyOpenCC
     revision: 1d8105a0f7199c90af722bff62728050c858e777
@@ -46,6 +51,10 @@ targets:
     dependencies:
       - package: SpeechSwift
         product: Qwen3ASR
+      - package: SherpaOnnx
+        product: sherpa-onnx
+      - package: MLX
+        product: MLX
       - package: SwiftyOpenCC
         product: OpenCC
     entitlements:
@@ -66,7 +75,7 @@ targets:
         ITSAppUsesNonExemptEncryption: false
         NSMicrophoneUsageDescription: 用咪收音，喺部手機度即時轉做廣東話字幕。
         UILaunchScreen: {}
-        # The model needs about 2.4 GB of memory: only iPhones with 8 GB (iPhone 15 Pro and later) get the app, so no
+        # The models need about 2.7 GB of memory: only iPhones with 8 GB (iPhone 15 Pro and later) get the app, so no
         # phone gets one it can't run (Deyao, 2026-10-28).
         UIRequiredDeviceCapabilities: [iphone-performance-gaming-tier]
         # That capability makes iOS treat the app as a game and switch Game Mode on while it is open; it isn't one.
