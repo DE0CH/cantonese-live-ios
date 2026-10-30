@@ -9,8 +9,8 @@ import UIKit
 /// speech-swift. Nothing leaves the phone. iOS allows no GPU work in the background, so it works with the app on
 /// screen: the screen stays awake while listening, and leaving the app stops it.
 ///
-/// The model runs all the time, with no speech detection in front of it, over a sliding window of the mic's 16 kHz
-/// audio (Worker): what two runs in a row agree on turns black.
+/// The model runs all the time, with no speech detection in front of it, over overlapping 8 s windows of the mic's
+/// 16 kHz audio (Worker): what two windows in a row agree on turns black, and runs in between fill in the grey.
 @MainActor
 final class Transcriber: ObservableObject {
     enum State: Equatable { case idle, loading(String), listening, failed(String) }
@@ -204,12 +204,16 @@ final class Transcriber: ObservableObject {
     }
 }
 
-/// A bundled 16 kHz mono clip the UI tests stream instead of the microphone, with every model run the app's loop made
+/// A bundled 16 kHz mono clip the UI tests stream instead of the microphone, with every model call the app's loop made
 /// over it with the real model on a Mac (testdata/…passes.json, from tools/demo-passes in the model-check
 /// workflow): the simulator's stand-in answers with them.
 struct TestClip: Sendable {
-    struct Run: Codable, Sendable { let audio: Int; let sum: Float; let context: String; let start: String; let text: String }
-    struct Passes: Codable, Sendable { var runs: [Run] = [] }
+    /// One call: its kind ("grey", "agree" or "last"), the audio's length and sum, what it was given, the answer.
+    struct Run: Codable, Sendable {
+        let kind: String; let audio: Int; let sum: Float; let context: String; let prefix: String; let text: String
+    }
+    /// The calls, and every text trimmed to be continued from (Worker.Model.trim) with what it became.
+    struct Passes: Codable, Sendable { var runs: [Run] = []; var trims: [String: String] = [:] }
     let samples: [Float]
     let passes: Passes
     /// CANTONESE_HOLD: the runs (comma-separated, counted from 1) to stop at for a screenshot.
@@ -223,10 +227,56 @@ struct TestClip: Sendable {
 
     private static func load(_ name: String) -> TestClip? {
         let file = { (n: String, e: String) in Bundle.main.url(forResource: n, withExtension: e).flatMap { try? Data(contentsOf: $0) } }
-        guard let samples = file(name, "wav").flatMap(Worker.samples(wav:)),
-              let passes = file(name + ".passes", "json").flatMap({ try? JSONDecoder().decode(Passes.self, from: $0) })
+        guard let samples = file(name, "wav").flatMap(Worker.samples(wav:)), let data = file(name + ".passes", "json")
         else { return nil }
-        return TestClip(samples: samples, passes: passes)
+        do { return TestClip(samples: samples, passes: try JSONDecoder().decode(Passes.self, from: data)) }
+        catch {
+            Worker.log.error("\(name, privacy: .public).passes.json is not in the current format (regenerate with tools/demo-passes): \(String(describing: error), privacy: .public)")
+            return nil
+        }
+    }
+
+    /// The simulator's stand-in for the model: the real model's answers to these very calls (same kind, audio, context
+    /// and prefix). An agreement run finishes in its one step.
+    static func standIn(_ passes: Passes) -> Worker.Model {
+        let answer = { (kind: String, audio: [Float], context: String, prefix: String) -> String? in
+            let sum = audio.reduce(0, +)
+            guard let r = passes.runs.first(where: {
+                $0.kind == kind && $0.audio == audio.count && $0.sum == sum && $0.context == context && $0.prefix == prefix
+            }) else {
+                Worker.log.error("\(kind, privacy: .public) run not recorded: \(audio.count) samples from \(prefix.count) chars")
+                return nil
+            }
+            return r.text
+        }
+        return Worker.Model(
+            grey: { audio, context, prefix, _, _, onText in
+                guard let text = answer("grey", audio, context, prefix) else { return prefix }
+                onText(text)
+                return text
+            },
+            agreement: { audio, context in ReplayedRun(answer("agree", audio, context, "") ?? "") },
+            last: { audio, context, _, onText in
+                guard let text = answer("last", audio, context, "") else { return "" }
+                onText(text)
+                return text
+            },
+            trim: { text in
+                passes.trims[text] ?? String(Worker.withoutEndPunctuation(text).dropLast())
+            })
+    }
+}
+
+/// An agreement run of the stand-in: the recorded text, after one step.
+private final class ReplayedRun: AgreementRun {
+    private let answer: String
+    private(set) var finished = false
+    var text: String { finished ? answer : "" }
+    var reuses: Int { 0 }
+    init(_ answer: String) { self.answer = answer }
+    func step() throws -> Bool {
+        finished = true
+        return true
     }
 }
 
@@ -244,28 +294,18 @@ extension Worker {
         }
         #if targetEnvironment(simulator)
         // The simulator has no Metal for MLX, so the UI tests run everything but the models, with this stand-in for
-        // them: the real model's answers to this very run (same audio, context and start).
+        // them: the real model's answers to these very calls (TestClip.standIn).
         _ = dir
-        let asr: ASR = { audio, context, start, _, onText in
-            let sum = audio.reduce(0, +)
-            guard let r = TestClip.current?.passes.runs.first(where: {
-                $0.audio == audio.count && $0.sum == sum && $0.context == context && $0.start == start
-            }) else {
-                log.error("run not recorded: \(audio.count) samples from \(start.count) chars")
-                return start
-            }
-            onText(r.text)
-            return r.text
-        }
+        let model = TestClip.standIn(TestClip.current?.passes ?? TestClip.Passes())
         #else
-        let model = try await Qwen3ASRModel.fromPretrained(
+        let qwen = try await Qwen3ASRModel.fromPretrained(
             modelId: modelId, cacheDir: dir.appendingPathComponent("asr"), offlineMode: true)
-        let asr = Worker.asr(model)
+        let model = Worker.model(qwen)
         cacheCap = Qwen3ASRMLXMemory.limitCache(to: cacheLimit)
         #endif
         let converter = try ChineseConverter(options: [.traditionalize, .hkStandard])
         log.notice("model loaded, \(Worker.memory(), privacy: .public)")
-        let w = Worker(asr: asr, convert: { converter.convert($0) })
+        let w = Worker(model: model, convert: { converter.convert($0) })
         cached = w
         return w
     }

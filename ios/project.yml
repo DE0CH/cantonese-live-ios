@@ -11,7 +11,7 @@ packages:
   SpeechSwift:   # DE0CH's fork (branch cantonese-live) of soniqo/speech-swift: decoding from a prefix, text per token,
                  # the prompt's keys and values reused across calls
     url: https://github.com/DE0CH/speech-swift
-    revision: 3112f4e665829d0335a846b6819cbc1ea22521fa
+    revision: 0e75698e8b188cf0d2890284f47256aa2a69a7bb
   SwiftyOpenCC:
     url: https://github.com/ddddxxx/SwiftyOpenCC
     revision: 1d8105a0f7199c90af722bff62728050c858e777

@@ -28,7 +28,7 @@ final class CantoneseUITests: XCTestCase {
         XCTAssertEqual(status(app), "聽緊", "never started listening (\(status(app)))")
         shot(app, "listening")
 
-        // The 7.5 s clip (and a second of silence) goes through the sliding window: grey while it grows, one slide at 8 s.
+        // The 7.5 s clip (and a second of silence) goes through the 8 s windows: grey while it plays, an agreement run every 2.67 s from 2.67 s.
         let transcript = app.staticTexts["transcript"]
         XCTAssertTrue(wait(60) { transcript.exists && transcript.label.contains("我哋") }, "no captions (\(status(app)))")
         shot(app, "transcribed")
