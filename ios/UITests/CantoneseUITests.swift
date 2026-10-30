@@ -88,7 +88,7 @@ final class CantoneseUITests: XCTestCase {
     /// the app's loop made over it on a Mac, tools/demo-passes). The appstore workflow makes the store
     /// screenshots from its shots (tools/storeart): the loop stops after two runs (CANTONESE_HOLD), one while only
     /// Cantonese has been said, one once English is mixed in, each showing grey text.
-    static let holds = (chinese: 108, mixed: 274)   // the runs in testdata/demo/demo-16k.passes.json
+    static let holds = (chinese: 113, mixed: 285)   // the runs in testdata/demo/demo-16k.passes.json
     static let cantonese = ["-AppleLanguages", "(zh-Hant-HK)"]
     func testDemo() throws {
         for (name, language) in [("zh-HK", "zh-Hant-HK"), ("zh-Hans", "zh-Hans-CN"), ("en", "en-HK")] {
