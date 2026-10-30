@@ -22,6 +22,8 @@ final class Transcriber: ObservableObject {
     @Published var held = false
     /// UI tests: the whole test clip has gone in and the loop has caught up.
     @Published var played = false
+    /// UI tests: the stand-in was asked for a run the recording doesn't have (TestClip.misses).
+    @Published var unrecorded = false
 
     var isRunning: Bool {
         switch state { case .loading, .listening: return true; default: return false }
@@ -41,10 +43,19 @@ final class Transcriber: ObservableObject {
     private var testAudio: Bool { testClip != nil }
 
     init() {
-        // The GPU is off limits in the background: leaving the app (or locking the phone) stops listening.
+        // The GPU is off limits in the background: leaving the app (or locking the phone) stops listening, and the
+        // model's work for that stop waits until the app is back.
         NotificationCenter.default.addObserver(forName: UIApplication.didEnterBackgroundNotification, object: nil,
                                                queue: .main) { [weak self] _ in
-            MainActor.assumeIsolated { self?.stop() }
+            MainActor.assumeIsolated {
+                Worker.suspendAll(true)
+                self?.stop()
+            }
+        }
+        // Back in the foreground only once active: GPU work is still refused while the app is entering the foreground.
+        NotificationCenter.default.addObserver(forName: UIApplication.didBecomeActiveNotification, object: nil,
+                                               queue: .main) { _ in
+            MainActor.assumeIsolated { Worker.suspendAll(false) }
         }
     }
 
@@ -56,14 +67,21 @@ final class Transcriber: ObservableObject {
             do {
                 let worker = try await Worker.shared()
                 try Task.checkCancellation()
-                let latest = Latest<[Worker.Line]> { [weak self] lines in self?.lines = lines }
-                worker.onUpdate = { latest.send($0) }
-                worker.onHold = { [weak self] held in
-                    Task { @MainActor in self?.held = held }
+                let test = self.testAudio
+                let latest = Latest<[Worker.Line]> { [weak self] lines in
+                    self?.lines = lines
+                    if test { self?.unrecorded = TestClip.misses.count > 0 }
                 }
-                worker.onFail = { [weak self] message in
-                    Task { @MainActor in self?.fail(message) }
-                }
+                let clip = testClip
+                worker.configure(
+                    onUpdate: { latest.send($0) },
+                    onHold: { [weak self] held in
+                        Task { @MainActor in self?.held = held }
+                    },
+                    onFail: { [weak self] message in
+                        Task { @MainActor in self?.fail(message) }
+                    },
+                    holdAfter: clip?.holdAfter ?? [], holdFor: 8)
                 worker.begin()
                 self.worker = worker
             } catch is CancellationError {
@@ -151,6 +169,22 @@ final class Transcriber: ObservableObject {
             throw CancellationError()
         }
         self.engine = engine
+        // A change of input route or sample rate stops the engine (and the tap's converter is for the old format): it
+        // comes on again with the new one, else listening stops with an error.
+        sessionObservers.append(center.addObserver(forName: .AVAudioEngineConfigurationChange, object: engine,
+                                                   queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self, self.engine === engine else { return }
+                Self.session.async {
+                    do { try Self.restart(engine, feeding: worker, target: target) } catch {
+                        Task { @MainActor [weak self] in
+                            guard let self, self.engine === engine else { return }
+                            self.fail(String(localized: "用唔到咪：\(error.localizedDescription)"))
+                        }
+                    }
+                }
+            }
+        })
     }
 
     /// The mic's audio, converted to 16 kHz mono, into the worker. Runs on the session queue.
@@ -164,6 +198,24 @@ final class Transcriber: ObservableObject {
         try session.setActive(true)
         pinBuiltInMic()
         let engine = AVAudioEngine()
+        try installTap(engine, feeding: worker, target: target)
+        engine.prepare()
+        try engine.start()
+        return engine
+    }
+
+    /// The engine again after a configuration change: the tap for the input's new format. Runs on the session queue.
+    private nonisolated static func restart(_ engine: AVAudioEngine, feeding worker: Worker?, target: AVAudioFormat) throws {
+        engine.inputNode.removeTap(onBus: 0)
+        let format = engine.inputNode.outputFormat(forBus: 0)
+        guard format.sampleRate > 0, format.channelCount > 0 else { return }   // no input yet: the next change brings it
+        try installTap(engine, feeding: worker, target: target)
+        engine.prepare()
+        try engine.start()
+    }
+
+    /// The tap that converts the input to 16 kHz mono for the worker.
+    private nonisolated static func installTap(_ engine: AVAudioEngine, feeding worker: Worker?, target: AVAudioFormat) throws {
         let input = engine.inputNode
         let format = input.outputFormat(forBus: 0)
         guard let converter = AVAudioConverter(from: format, to: target) else { throw CocoaError(.featureUnsupported) }
@@ -179,9 +231,6 @@ final class Transcriber: ObservableObject {
             guard error == nil, out.frameLength > 0, let ch = out.floatChannelData else { return }
             worker?.feed(Array(UnsafeBufferPointer(start: ch[0], count: Int(out.frameLength))))
         }
-        engine.prepare()
-        try engine.start()
-        return engine
     }
 
     private nonisolated static func pinBuiltInMic() {
@@ -193,13 +242,14 @@ final class Transcriber: ObservableObject {
 
     private func streamTestFile() {
         guard let clip = testClip, let worker else { fail("搵唔到測試錄音"); return }
-        worker.holdAfter = clip.holdAfter
-        worker.holdFor = 8
         played = false
         Worker.log.notice("test audio starts")
         filePlayback = Task { [weak self] in
             await worker.play(clip.samples, pace: true)
-            if !Task.isCancelled { self?.played = true }
+            if !Task.isCancelled {
+                self?.unrecorded = TestClip.misses.count > 0
+                self?.played = true
+            }
         }
     }
 }
@@ -214,6 +264,15 @@ struct TestClip: Sendable {
     }
     /// The calls, and every text trimmed to be continued from (Worker.Model.trim) with what it became.
     struct Passes: Codable, Sendable { var runs: [Run] = []; var trims: [String: String] = [:] }
+    /// Calls the stand-in had no recorded answer for: the loop went another way than on the Mac (the recordings are
+    /// out of date), which the UI tests fail on.
+    final class Misses: @unchecked Sendable {
+        private let lock = NSLock()
+        private var n = 0
+        var count: Int { lock.lock(); defer { lock.unlock() }; return n }
+        func add() { lock.lock(); n += 1; lock.unlock() }
+    }
+    static let misses = Misses()
     let samples: [Float]
     let passes: Passes
     /// CANTONESE_HOLD: the runs (comma-separated, counted from 1) to stop at for a screenshot.
@@ -245,6 +304,7 @@ struct TestClip: Sendable {
                 $0.kind == kind && $0.audio == audio.count && $0.sum == sum && $0.context == context && $0.prefix == prefix
             }) else {
                 Worker.log.error("\(kind, privacy: .public) run not recorded: \(audio.count) samples from \(prefix.count) chars")
+                misses.add()
                 return nil
             }
             return r.text
@@ -281,14 +341,33 @@ private final class ReplayedRun: AgreementRun {
 }
 
 extension Worker {
-    private static var cached: Worker?
-    private static var cacheCap: AnyObject?   // held for as long as the app runs
+    @MainActor private static var cached: Worker?
+    @MainActor private static var loading: Task<Worker, Error>?
+    nonisolated(unsafe) private static var cacheCap: AnyObject?   // held for as long as the app runs (set by the one load)
     /// The model is in memory: starting again is immediate.
-    static var loaded: Bool { cached != nil }
+    @MainActor static var loaded: Bool { cached != nil }
 
-    /// Loads the model shipped inside the app (ios/fetch-model.sh puts them in Model/) once and keeps them.
-    static func shared() async throws -> Worker {
+    /// The app went to the background or came back: see `suspend`.
+    @MainActor static func suspendAll(_ on: Bool) { cached?.suspend(on) }
+
+    /// Loads the model shipped inside the app (ios/fetch-model.sh puts them in Model/) once and keeps them. One load at
+    /// a time: a start after a cancelled one waits for the load under way (which a cancel doesn't stop).
+    @MainActor static func shared() async throws -> Worker {
         if let w = cached { return w }
+        let task = loading ?? Task.detached { try await Worker.load() }
+        loading = task
+        do {
+            let w = try await task.value
+            cached = w
+            loading = nil
+            return w
+        } catch {
+            loading = nil
+            throw error
+        }
+    }
+
+    private static func load() async throws -> Worker {
         guard let dir = Bundle.main.url(forResource: "Model", withExtension: nil) else {
             throw CocoaError(.fileNoSuchFile)
         }
@@ -305,9 +384,7 @@ extension Worker {
         #endif
         let converter = try ChineseConverter(options: [.traditionalize, .hkStandard])
         log.notice("model loaded, \(Worker.memory(), privacy: .public)")
-        let w = Worker(model: model, convert: { converter.convert($0) })
-        cached = w
-        return w
+        return Worker(model: model, convert: { converter.convert($0) })
     }
 }
 

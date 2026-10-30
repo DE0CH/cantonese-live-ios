@@ -4,9 +4,11 @@
 //              loop made over the clip (grey runs, agreement runs, the last run: the audio's length and sum, what it was
 //              given, the answer) and every text it trimmed to continue from, for the simulator's stand-in
 //              (testdata/…passes.json). Stops the loop after the clip like the Stop button, so the last run is recorded too.
-// Checks (exit 1 on any difference): every grey or last run that reused an agreement run's first 8 s is run again
-// without it (the same blockwise computation, nothing reused), every grey run that reused the cached prompt is run again
-// without the cache, and every agreement run, taken in steps, is run again as one plain call; the texts must be the same.
+// Checks (exit 1 on any difference): every grey or last run that reused an agreement run's first 8 s (its encoder output
+// and decoder keys and values, or only its encoder output when too little is left to prefill) is run again without it
+// (the same blockwise computation, nothing reused), every grey run that reused the cached prompt is run again without
+// the cache, and every agreement run, taken in steps, is run again as one plain call; the texts must be the same. A clip
+// long enough for them that got no agreement checks, or no reuse checks, fails too.
 // The checks run between the loop's calls (when a run is counted, the model is free), so none of the times the loop
 // measures (its log, its scheduling) include them. Timings per kind of call and memory are printed, with MLX's buffer
 // cache capped as in the app.
@@ -27,6 +29,7 @@ final class Record: @unchecked Sendable {
     var last = ""                       // what the last call did, for the log
     var times: [String: [Int]] = [:]    // ms per kind of call
     var reuseChecks = 0
+    var encoderOnly = 0                 // of them, runs that reused only the encoder output
     var reuseMismatches = 0
     var agreeChecks = 0
     var agreeMismatches = 0
@@ -46,14 +49,22 @@ func ms(since t0: Date) -> Int { Int(Date().timeIntervalSince(t0) * 1000) }
 /// An agreement run of the real model, timed step by step; `finish` gets it once it has finished.
 final class Checked: AgreementRun {
     let run: Qwen3AgreementRun
+    let audio: [Float]
     private let finish: (Checked) -> Void
     private let fail: (Error) -> Void
     var total = 0                       // ms over all steps, and the longest step
     var longest = 0
-    init(_ run: Qwen3AgreementRun, finish: @escaping (Checked) -> Void, fail: @escaping (Error) -> Void) {
+    init(_ run: Qwen3AgreementRun, audio: [Float], finish: @escaping (Checked) -> Void, fail: @escaping (Error) -> Void) {
         self.run = run
+        self.audio = audio
         self.finish = finish
         self.fail = fail
+    }
+    /// Whether a blockwise call on `audio` with `context` (as Worker.model makes it) gets this run's encoder output for
+    /// its first block, whether or not its keys and values are reused too.
+    func standsIn(for audio: [Float], context: String) -> Bool {
+        run.finished && run.audioCount == Qwen3ASRModel.blockSamples && audio.count > run.audioCount
+            && run.context == context && self.audio.elementsEqual(audio[0..<run.audioCount])
     }
     var text: String { run.text }
     var finished: Bool { run.finished }
@@ -79,7 +90,7 @@ let cacheCap = Qwen3ASRMLXMemory.limitCache(to: Worker.cacheLimit)
 print("model loaded, \(Worker.memory())")
 var failed = false
 var totals: [String: [Int]] = [:]
-var reuseChecks = 0, reuseMismatches = 0, agreeChecks = 0, agreeMismatches = 0, cacheChecks = 0, cacheMismatches = 0
+var reuseChecks = 0, encoderOnly = 0, reuseMismatches = 0, agreeChecks = 0, agreeMismatches = 0, cacheChecks = 0, cacheMismatches = 0
 
 for k in stride(from: 2, to: args.count, by: 2) {
     guard let wav = FileManager.default.contents(atPath: args[k]), let samples = Worker.samples(wav: wav) else {
@@ -107,7 +118,8 @@ for k in stride(from: 2, to: args.count, by: 2) {
     }
     let worker = Worker(model: Worker.Model(
         grey: { audio, context, prefix, base, cache, onText in
-            let inner = (base as? Checked)?.run
+            let checked = base as? Checked
+            let inner = checked?.run
             let reuses = inner?.reuses ?? 0
             let hits = cache?.hits ?? 0
             let t0 = Date()
@@ -119,6 +131,11 @@ for k in stride(from: 2, to: args.count, by: 2) {
             if let inner, inner.reuses > reuses {
                 note = " (first 8 s reused)"
                 record.times["grey or last reusing an agreement run's first 8 s", default: []].append(took)
+                checkReuse(text) { try real.grey(audio, context, prefix, nil, nil, { _ in }) }
+            } else if let checked, checked.standsIn(for: audio, context: context) {
+                note = " (first 8 s's encoder output reused)"
+                record.times["grey or last reusing only an agreement run's encoder output", default: []].append(took)
+                record.encoderOnly += 1
                 checkReuse(text) { try real.grey(audio, context, prefix, nil, nil, { _ in }) }
             } else if let cache, cache.hits > hits {
                 note = " (cached prompt)"
@@ -145,7 +162,7 @@ for k in stride(from: 2, to: args.count, by: 2) {
             return text
         },
         agreement: { audio, context in
-            Checked(model.agreementRun(audio: audio, context: context, maxTokens: Worker.maxTokens), finish: { c in
+            Checked(model.agreementRun(audio: audio, context: context, maxTokens: Worker.maxTokens), audio: audio, finish: { c in
                 let text = c.run.text
                 record.passes.runs.append(Run(kind: "agree", audio: audio.count, sum: audio.reduce(0, +), context: context,
                                               prefix: "", text: text))
@@ -176,7 +193,8 @@ for k in stride(from: 2, to: args.count, by: 2) {
             })
         },
         last: { audio, context, base, onText in
-            let inner = (base as? Checked)?.run
+            let checked = base as? Checked
+            let inner = checked?.run
             let reuses = inner?.reuses ?? 0
             let t0 = Date()
             let text = try real.last(audio, context, inner, onText)
@@ -188,6 +206,11 @@ for k in stride(from: 2, to: args.count, by: 2) {
             if let inner, inner.reuses > reuses {
                 note = " (first 8 s reused)"
                 record.times["grey or last reusing an agreement run's first 8 s", default: []].append(took)
+                checkReuse(text) { try real.last(audio, context, nil, { _ in }) }
+            } else if let checked, checked.standsIn(for: audio, context: context) {
+                note = " (first 8 s's encoder output reused)"
+                record.times["grey or last reusing only an agreement run's encoder output", default: []].append(took)
+                record.encoderOnly += 1
                 checkReuse(text) { try real.last(audio, context, nil, { _ in }) }
             }
             record.last = "last (after Stop), \(seconds(audio)) s, \(context.count) chars of context, \(took) ms\(note): \"\(text)\"\n    \(Worker.memory())"
@@ -221,7 +244,7 @@ for k in stride(from: 2, to: args.count, by: 2) {
     print("\(record.passes.runs.count) calls, \(record.passes.trims.count) trims")
     print("FINAL TRANSCRIPT:")
     for l in record.lines { print("  \(l.settled)\(l.tail)") }
-    print("reuse check: \(record.reuseChecks) runs that reused an agreement run's first 8 s run again without it, \(record.reuseMismatches) differ")
+    print("reuse check: \(record.reuseChecks) runs that reused an agreement run's first 8 s (\(record.encoderOnly) only its encoder output) run again without it, \(record.reuseMismatches) differ")
     print("agreement check: \(record.agreeChecks) agreement runs run again in one call, \(record.agreeMismatches) differ")
     print("prompt cache check: \(record.cacheChecks) cached grey runs run again without the cache, \(record.cacheMismatches) differ")
     for (k, v) in record.times { totals[k, default: []] += v }
@@ -231,6 +254,12 @@ for k in stride(from: 2, to: args.count, by: 2) {
     agreeMismatches += record.agreeMismatches
     cacheChecks += record.cacheChecks
     cacheMismatches += record.cacheMismatches
+    // A clip that reaches the first window's end has agreement runs to check; one longer than a window and a step, runs
+    // that reuse a finished window's first 8 s.
+    let heard = samples.count + Worker.rate
+    if heard >= Worker.step, record.agreeChecks == 0 { print("NO AGREEMENT RUN CHECKED"); failed = true }
+    if heard > Worker.window + Worker.step, record.reuseChecks == 0 { print("NO REUSE CHECKED"); failed = true }
+    encoderOnly += record.encoderOnly
     if record.failed { failed = true }
 }
 
@@ -239,7 +268,7 @@ for (kind, v) in totals.sorted(by: { $0.key < $1.key }) {
     let s = v.sorted()
     print("\(kind): \(v.count) calls, mean \(v.reduce(0, +) / max(1, v.count)), median \(s[s.count / 2]), max \(s.last ?? 0)")
 }
-print("BLOCK REUSE: \(reuseChecks) checked, \(reuseMismatches) mismatches")
+print("BLOCK REUSE: \(reuseChecks) checked (\(encoderOnly) only the encoder output), \(reuseMismatches) mismatches")
 print("AGREEMENT RUNS: \(agreeChecks) checked, \(agreeMismatches) mismatches")
 print("PROMPT CACHE: \(cacheChecks) checked, \(cacheMismatches) mismatches")
 print("MEMORY at the end: \(Worker.memory())")

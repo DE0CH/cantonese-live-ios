@@ -32,13 +32,15 @@ final class CantoneseUITests: XCTestCase {
         let transcript = app.staticTexts["transcript"]
         XCTAssertTrue(wait(60) { transcript.exists && transcript.label.contains("我哋") }, "no captions (\(status(app)))")
         shot(app, "transcribed")
-        XCTAssertTrue(wait(60) { transcript.value as? String == "played" }, "the clip didn't finish playing")
+        XCTAssertTrue(wait(60) { loop(transcript).hasPrefix("played") }, "the clip didn't finish playing")
+        XCTAssertFalse(loop(transcript).contains("unrecorded"), "the stand-in missed runs: regenerate the recordings")
 
         app.buttons["mic"].tap()                  // 停止: one last run, everything black
         XCTAssertTrue(app.buttons["開始"].waitForExistence(timeout: 10), "stop didn't stop")
         Thread.sleep(forTimeInterval: 1)
         let text = transcript.exists ? transcript.label : ""
         print("TRANSCRIPT: \(text)")
+        XCTAssertFalse(loop(transcript).contains("unrecorded"), "the stand-in missed the last run: regenerate the recordings")
         XCTAssertTrue(text.contains("我哋"), "lost the spoken form: \(text) (\(status(app)))")
         XCTAssertTrue(text.contains("飲茶"), "not HK Traditional: \(text)")
         app.buttons["clear"].tap()
@@ -112,17 +114,19 @@ final class CantoneseUITests: XCTestCase {
         XCTAssertTrue(wait(120) { state(app) == "listening" }, "never started listening (\(status(app)))")
         let transcript = app.staticTexts["transcript"]
         for shotName in ["demo-chinese", "demo-mixed"] {
-            XCTAssertTrue(wait(60) { transcript.exists && transcript.value as? String == "held" }, "the loop didn't stop for \(shotName)")
+            XCTAssertTrue(wait(60) { transcript.exists && loop(transcript).hasPrefix("held") }, "the loop didn't stop for \(shotName)")
+            XCTAssertFalse(loop(transcript).contains("unrecorded"), "the stand-in missed runs before \(shotName): regenerate the recordings")
             Thread.sleep(forTimeInterval: 0.5)   // the screen takes the newest lines every 0.1 s
             shot(app, "\(shotName)-\(name)")
             print("\(shotName)-\(name): \(transcript.label)")
-            XCTAssertTrue(wait(30) { !transcript.exists || transcript.value as? String != "held" })
+            XCTAssertTrue(wait(30) { !transcript.exists || !loop(transcript).hasPrefix("held") })
         }
         // The rest of the conversation and a second of silence, then Stop: one last run, everything black.
-        XCTAssertTrue(wait(120) { transcript.value as? String == "played" }, "the demo didn't finish playing")
+        XCTAssertTrue(wait(120) { loop(transcript).hasPrefix("played") }, "the demo didn't finish playing")
         app.buttons["mic"].tap()
         Thread.sleep(forTimeInterval: 2)
         let text = transcript.label
+        XCTAssertFalse(loop(transcript).contains("unrecorded"), "the stand-in missed runs: regenerate the recordings")
         print("DEMO TRANSCRIPT \(name): \(text)")
         for words in ["Central", "proposal", "send"] { XCTAssertTrue(text.contains(words), "demo captions missing \(words): \(text)") }
         app.terminate()
@@ -138,6 +142,8 @@ final class CantoneseUITests: XCTestCase {
     }
 
     private func status(_ app: XCUIApplication) -> String { app.staticTexts["status"].label }
+    /// The transcript's value: "held" or "played" (or nothing), then " unrecorded" if the stand-in missed a run.
+    private func loop(_ transcript: XCUIElement) -> String { transcript.exists ? transcript.value as? String ?? "" : "" }
     private func state(_ app: XCUIApplication) -> String { app.staticTexts["status"].value as? String ?? "" }
 
     private func shot(_ app: XCUIApplication, _ name: String) {

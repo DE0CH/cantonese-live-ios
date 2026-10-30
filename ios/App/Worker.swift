@@ -43,8 +43,10 @@ extension Qwen3AgreementRun: AgreementRun {}
 /// letting the next grey runs go at once.
 ///
 /// 10 s or more behind (an agreement run still unfinished 10 s after the end of its window): the phone can't keep up
-/// and listening stops with an error. Stopping lets the agreement run under way finish, then runs the model once more,
-/// afresh, from the start of the latest finished window to the end: all of it black.
+/// and listening stops with an error. A failed agreement run leaves its window unfinished, so failing runs count too.
+/// Stopping lets the agreement run under way finish, then runs the model once more, afresh, from the start of the latest finished window to the end:
+/// all of it black. A session started and stopped again meanwhile gets its own last run after that one.
+/// In the background (`suspend`) the model gets no work; it carries on where it was once the app is back.
 /// Black text is split into lines at the end of each sentence; the last line holds the unfinished black text and the grey.
 final class Worker: @unchecked Sendable {
     static let log = Logger(subsystem: "dev.de0ch.cantonese", category: "model")
@@ -123,6 +125,7 @@ final class Worker: @unchecked Sendable {
         let context: String
         var run: AgreementRun?          // made on modelQueue at the first step
         var text = ""                   // once finished
+        var blackEnd: Int?              // where the black text ends in `text` after its merge, if known
         var steps = 0                   // steps taken, their total and longest time (ms)
         var ms = 0.0
         var longest = 0.0
@@ -136,6 +139,8 @@ final class Worker: @unchecked Sendable {
         let line: Open; let from: Int // where the audio starts (samples since listening began)
         var black = ""                // for the last run, which ends the session: the black text so far
         var agreed = ""               // and the latest finished window's text
+        var near: Int?                // where the black text ends in the latest finished window's text, if known
+        var fallback = ""             // the last run's text if it fails: the grey text, else the window's text
     }
 
     // audioQueue state.
@@ -158,12 +163,17 @@ final class Worker: @unchecked Sendable {
     private var lastStepMs: Double?       // the last agreement run's mean step time and how many tokens it took
     private var lastTokens = 1
     private var incoming: [Float] = []    // mic audio of a new session while the last one's last run waits
+    private var stopped: [[Float]] = []   // the audio of such sessions stopped again, each still to get its last run
+    private var closing: Open?            // the line the last run under way finishes
     private var busy = false
     private var running = false
     private var finishing = false         // stopped; the last run is still to start
     private var passes = 0                // model runs finished
     private var holding = false
     private var waiting: [CheckedContinuation<Void, Never>] = []   // `idle()` callers
+    // Any thread: the app is in the background, so no work goes to the GPU (see `suspend`).
+    private let pause = NSCondition()
+    private var paused = false
 
     init(model: Model, convert: @escaping (String) -> String) {
         self.asr = model
@@ -213,6 +223,43 @@ final class Worker: @unchecked Sendable {
         return String(t)
     }
 
+    /// The callbacks (and the screenshot holds), set on audioQueue before the session they are for: the last session's
+    /// runs may still be calling the old ones.
+    func configure(onUpdate: (@Sendable ([Line]) -> Void)?, onHold: (@Sendable (Bool) -> Void)?,
+                   onFail: (@Sendable (String) -> Void)?,
+                   holdAfter: Set<Int> = [], holdFor: TimeInterval = 5) {
+        audioQueue.async { [self] in
+            self.onUpdate = onUpdate
+            self.onHold = onHold
+            self.onFail = onFail
+            self.holdAfter = holdAfter
+            self.holdFor = holdFor
+        }
+    }
+
+    /// The app went to the background (true) or came back (false). iOS allows no GPU work in the background: no step or
+    /// run starts, and a run under way waits before its next token, until the app is back.
+    func suspend(_ on: Bool) {
+        pause.lock()
+        paused = on
+        pause.broadcast()
+        pause.unlock()
+        if !on { audioQueue.async { [self] in schedule() } }
+    }
+
+    private var suspended: Bool {
+        pause.lock()
+        defer { pause.unlock() }
+        return paused
+    }
+
+    /// On modelQueue: waits while the app is in the background.
+    private func waitWhileSuspended() {
+        pause.lock()
+        while paused { pause.wait() }
+        pause.unlock()
+    }
+
     func begin() {
         audioQueue.async { [self] in
             running = true
@@ -225,8 +272,12 @@ final class Worker: @unchecked Sendable {
         audioQueue.async { [self] in
             guard running else { return }
             running = false
-            // A window due at Stop (not yet started while the model was busy) is the pending one; no later ones start.
-            if !finishing, agreeing == nil, heard >= Self.readyAt(next) {
+            if finishing {
+                // This session started while the last one was finishing: all it heard waits for its own last run.
+                if !incoming.isEmpty { stopped.append(incoming) }
+                incoming = []
+            } else if agreeing == nil, heard >= Self.readyAt(next) {
+                // A window due at Stop (not yet started while the model was busy) is the pending one; no later ones start.
                 agreeing = Agreement(k: next, audio: slice(max(0, next * Self.step), Self.readyAt(next)), context: context)
             }
             finishing = true
@@ -234,9 +285,11 @@ final class Worker: @unchecked Sendable {
         }
     }
 
-    /// Clear the screen: everything already finished goes; while listening, the line being spoken carries on.
+    /// Clear the screen: everything already finished goes; while listening, the line being spoken carries on. A line
+    /// a last run is still finishing goes too.
     func clear() {
         audioQueue.async { [self] in
+            closing?.dropped = true
             if running && !finishing {
                 lines.removeAll { $0.id != open.id }
             } else {
@@ -320,15 +373,17 @@ final class Worker: @unchecked Sendable {
     /// Give the model its next piece of work if it is free: a grey run when one is due and the agreement run under way
     /// has had its share (or there is none), else a step of the agreement run, else the last run after a stop.
     private func schedule() {
-        guard !busy, !holding else { return }
+        guard !busy, !holding, !suspended else { return }
         // While listening: the next window, once the mic has heard it to its end (after Stop, only the run end() left
         // under way finishes).
         if listening, agreeing == nil, heard >= Self.readyAt(next) {
             agreeing = Agreement(k: next, audio: slice(max(0, next * Self.step), Self.readyAt(next)), context: context)
         }
-        if listening, let a = agreeing, heard - Self.readyAt(a.k) >= Self.behind {
-            let late = (heard - Self.readyAt(a.k)) / 16
-            Self.log.error("fell behind: window \(a.k) still unfinished \(late) ms after its end")
+        // The oldest window without a finished agreement run: the one under way, or one whose run failed.
+        let due = (agreed?.k ?? -3) + 1
+        if listening, heard - Self.readyAt(due) >= Self.behind {
+            let late = (heard - Self.readyAt(due)) / 16
+            Self.log.error("fell behind: window \(due) still unfinished \(late) ms after its end")
             fallBehind()
             return
         }
@@ -358,21 +413,29 @@ final class Worker: @unchecked Sendable {
         // With the agreement run's first block comes its context; else the black text's end, with the cached prompt.
         work(Job(kind: .grey, audio: slice(from, heard), context: base?.context ?? context,
                  prefix: greyFrom == from ? greyText : (agreed?.text ?? ""),
-                 base: base, cache: base == nil ? cache : nil, line: open, from: from))
+                 base: base, cache: base == nil ? cache : nil, line: open, from: from, near: agreed?.blackEnd))
     }
 
     /// The last run after a stop (no agreement run under way any more): afresh from the latest finished window's start.
-    /// The next session, if listening started again meanwhile, begins with the audio it has heard so far.
+    /// Then a session stopped while it waited gets its own last run, over all it heard (no agreement run ran for it);
+    /// else the next session, if listening started again meanwhile, begins with the audio it has heard so far.
     private func runLast() {
         let from = greyStart
         let base = reusable(from)
         let job = Job(kind: .last, audio: slice(from, heard), context: base?.context ?? context, prefix: "", base: base,
-                      cache: nil, line: open, from: from, black: black, agreed: agreed?.text ?? "")
+                      cache: nil, line: open, from: from, black: black, agreed: agreed?.text ?? "",
+                      near: agreed?.blackEnd, fallback: greyFrom == from ? greyText : (agreed?.text ?? ""))
+        closing = open
         finishing = false
-        let queued = incoming
-        incoming = []
         newSession()
-        if running { audio = queued; heard = queued.count }
+        if !stopped.isEmpty {
+            let queued = stopped.removeFirst()
+            audio = queued; heard = queued.count
+            finishing = true
+        } else if running {
+            audio = incoming; heard = incoming.count
+            incoming = []
+        }
         work(job)
     }
 
@@ -380,9 +443,11 @@ final class Worker: @unchecked Sendable {
     private func work(_ job: Job) {
         busy = true
         modelQueue.async { [self] in
+            waitWhileSuspended()
             let t0 = Date()
-            // The grey fills in token by token while the model writes it.
+            // The grey fills in token by token while the model writes it (none written in the background).
             let text = transcribe(job) { [weak self] sofar in
+                self?.waitWhileSuspended()
                 self?.audioQueue.async { self?.showPartial(job, sofar) }
             }
             let took = Date().timeIntervalSince(t0) * 1000
@@ -409,6 +474,7 @@ final class Worker: @unchecked Sendable {
     private func runStep(_ a: Agreement) {
         busy = true
         modelQueue.async { [self] in
+            waitWhileSuspended()
             let t0 = Date()
             let done: Bool
             do {
@@ -472,18 +538,19 @@ final class Worker: @unchecked Sendable {
         guard job.line === open else { return }
         greyFrom = job.from
         greyText = text
-        open.grey = Self.after(black, in: text)
+        open.grey = Self.after(black, in: text, near: job.near)
         show(open)
     }
 
     /// An agreement run ended: merge its text with the last window's on their longest common stretch. The last
     /// window's text up to the end of it turns black (from where the black text so far meets it); grey runs then start
-    /// at this window, and the audio before it goes.
+    /// at this window, from its text, and the audio before it goes.
     private func agreementFinished(_ a: Agreement) {
         agreeing = nil
         next += 1
         credit = 0
-        // A failed run changes nothing: the next window merges with the last good one, grey runs keep their start.
+        // A failed run changes nothing: the next window merges with the last good one, grey runs keep their start (and
+        // its window counts as unfinished for "too slow").
         guard let run = a.run, run.finished else {
             Self.log.notice("agreement run over window \(a.k) failed after \(a.steps) steps; keeping window \(self.agreed?.k ?? -3)")
             return
@@ -493,11 +560,13 @@ final class Worker: @unchecked Sendable {
         lastTokens = max(1, a.steps - Self.prefillSteps)
         Self.log.notice("agreement run over window \(a.k) (\(a.audio.count / 16) ms) in \(Int(a.ms)) ms, \(a.steps) steps, longest \(Int(a.longest)) ms: \(a.text, privacy: .private)")
         Self.log.notice("memory: \(Self.memory(), privacy: .public)")
-        let more = Self.merged(black: black, old: agreed?.text ?? "", new: a.text)
+        let (more, end) = Self.merged(black: black, old: agreed?.text ?? "", new: a.text, near: agreed?.blackEnd)
         black += more
         open.black += more
+        a.blackEnd = end
         context = String(black.suffix(Self.contextChars).drop { $0.isWhitespace })
         agreed = a
+        greyFrom = nil   // the next grey run continues from this window's text
         let keep = greyStart
         audio.removeFirst(keep - kept)
         kept = keep
@@ -507,45 +576,54 @@ final class Worker: @unchecked Sendable {
     }
 
     /// Merging the last window's text `old` with `new` on their longest common stretch: the text of `old` that turns
-    /// black, from where the black text so far ends in it (only the stretch itself if it isn't there) to the end of the
-    /// stretch. Empty if they share no stretch of at least 2 characters.
-    static func merged(black: String, old: String, new: String) -> String {
+    /// black, from where the black text so far ends in it (`near` there if known; only the stretch itself if it isn't
+    /// there) to the end of the stretch, and where the black text then ends in `new` (nil if not known). Empty if they
+    /// share no stretch of at least 2 characters.
+    static func merged(black: String, old: String, new: String, near: Int? = nil) -> (text: String, end: Int?) {
         let o = Array(old), n = Array(new)
         guard let m = longestCommon(o, n), m.length >= overlap else {
             if !o.isEmpty { log.notice("merge: the two windows share no stretch, nothing turns black") }
-            return ""
+            return ("", nil)
         }
         let end = m.a + m.length
-        let from = black.isEmpty ? 0 : (meets(black, in: o) ?? m.a)
+        let from = black.isEmpty ? 0 : (meets(black, in: o, near: near, upTo: end) ?? m.a)
         log.notice("merge on \(m.length) chars: black to \(end) of the last window's \(o.count)")
-        return end > from ? String(o[from..<end]) : ""
+        return (end > from ? String(o[from..<end]) : "", end >= from ? m.b + m.length : nil)
     }
 
+    static func skipped(_ c: Character) -> Bool { c.isPunctuation || c.isWhitespace }
+
     /// Where the black text so far ends in `text`: just after the longest end of `black` (at least 2 characters) that
-    /// `text` contains, and any punctuation that follows it there, or nil. Punctuation and spaces don't count, as two
-    /// runs often differ only in them (「到。」 and 「到，」).
-    static func meets(_ black: String, in text: [Character]) -> Int? {
-        let skip = { (c: Character) in c.isPunctuation || c.isWhitespace }
-        let tail = Array(black.suffix(60).filter { !skip($0) }.suffix(40))
-        let at = text.indices.filter { !skip(text[$0]) }       // positions of the characters that count
+    /// `text` contains, or nil. Punctuation and spaces don't count, as two runs often differ only in them (「到。」 and
+    /// 「到，」): if `black` ends with its own, those that follow there are skipped too; else they are new text. A short
+    /// end can be there more than once: the one nearest `near` (where the black text is known to end), else the last
+    /// one not past `upTo`.
+    static func meets(_ black: String, in text: [Character], near: Int? = nil, upTo: Int? = nil) -> Int? {
+        let tail = Array(black.suffix(60).filter { !skipped($0) }.suffix(40))
+        let at = text.indices.filter { !skipped(text[$0]) }       // positions of the characters that count
         let core = at.map { text[$0] }
+        let ownEnd = black.last.map(skipped) ?? false
         guard tail.count >= overlap, !core.isEmpty else { return nil }
         for k in stride(from: tail.count, through: overlap, by: -1) {
             let end = Array(tail[(tail.count - k)...])
             guard k <= core.count else { continue }
-            if let i = (0...(core.count - k)).first(where: { Array(core[$0..<($0 + k)]) == end }) {
+            let found = (0...(core.count - k)).filter { Array(core[$0..<($0 + k)]) == end }.map { i -> Int in
                 var j = at[i + k - 1] + 1
-                while j < text.count, skip(text[j]) { j += 1 }
+                if ownEnd { while j < text.count, skipped(text[j]) { j += 1 } }
                 return j
             }
+            guard let last = found.last else { continue }
+            if let near { return found.min { abs($0 - near) < abs($1 - near) } ?? last }
+            return found.last { $0 <= (upTo ?? text.count) } ?? last
         }
         return nil
     }
 
     /// What `text` has after the point where it meets the black text (all of it if they don't meet).
-    static func after(_ black: String, in text: String) -> String {
+    static func after(_ black: String, in text: String, near: Int? = nil) -> String {
         let chars = Array(text)
-        return String(chars[(meets(black, in: chars) ?? 0)...]).trimmingCharacters(in: .whitespaces)
+        guard let j = meets(black, in: chars, near: near) else { return text.trimmingCharacters(in: .whitespaces) }
+        return String(chars[j...])
     }
 
     /// The longest stretch two texts have in common: where it starts in each, and its length (characters, ignoring
@@ -571,11 +649,12 @@ final class Worker: @unchecked Sendable {
     /// The latest finished window is merged with it first, so the audio that window heard isn't lost.
     private func finished(_ job: Job, _ text: String) {
         let line = job.line
-        let more = Self.merged(black: job.black, old: job.agreed, new: text)
-        line.black += more + Self.after(job.black + more, in: text)
+        let (more, end) = Self.merged(black: job.black, old: job.agreed, new: text, near: job.near)
+        line.black += more + Self.after(job.black + more, in: text, near: end)
         line.grey = ""
         splitSentences(line)
         close(line)
+        if closing === line { closing = nil }
     }
 
     /// The phone fell behind: listening stops, the black text stays.
@@ -639,19 +718,25 @@ final class Worker: @unchecked Sendable {
         let line = job.line
         guard line === open || job.kind == .last, !line.dropped else { return }
         let known = job.kind == .last ? job.black : black
-        // Until the run has written past the end of the black text, its text is only the black text again.
-        guard known.isEmpty || Self.meets(known, in: Array(sofar)) != nil else { return }
-        let grey = Self.after(known, in: sofar)
+        // A run whose start has the end of the black text (the text it continues from, or afresh the latest finished
+        // window's) writes the black text again first: until it has written past its end, nothing new shows. One whose
+        // start doesn't (new speech after a pause) shows at once.
+        if !known.isEmpty, Self.meets(known, in: Array(sofar), near: job.near) == nil {
+            let start = job.kind == .last ? job.agreed : job.prefix
+            guard Self.meets(known, in: Array(start)) == nil else { return }
+        }
+        let grey = Self.after(known, in: sofar, near: job.near)
         guard grey.count >= line.grey.count else { return }
         line.grey = grey
         show(line)
     }
 
     /// A grey or last run on the model, its prefix trimmed first; on an error, the prefix as given (untrimmed, so a
-    /// failed run doesn't wear it down).
+    /// failed run doesn't wear it down), or for the last run the text it falls back on.
     private func transcribe(_ job: Job, onText: @escaping @Sendable (String) -> Void) -> String {
         let prefix = job.prefix.isEmpty ? "" : asr.trim(job.prefix)
-        guard job.audio.count >= Self.shortest else { return job.prefix }
+        let failed = job.kind == .last ? job.fallback : job.prefix
+        guard job.audio.count >= Self.shortest else { return failed }
         let t0 = Date()
         let hits = job.cache?.hits ?? 0
         let reuses = job.base?.run?.reuses ?? 0
@@ -668,7 +753,7 @@ final class Worker: @unchecked Sendable {
             return text.hasPrefix(prefix) ? text : job.prefix
         } catch {
             Self.log.error("\(job.kind.rawValue, privacy: .public) run failed after \(Int(Date().timeIntervalSince(t0) * 1000)) ms: \(error.localizedDescription, privacy: .public)")
-            return job.prefix
+            return failed
         }
     }
 
