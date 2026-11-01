@@ -13,8 +13,8 @@ struct ContentView: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .textSelection(.enabled)
                         .accessibilityIdentifier("transcript")
-                        // UI tests: the loop's state, and whether the stand-in missed a run (TestClip.misses).
-                        .accessibilityValue((t.held ? "held" : t.played ? "played" : "") + (t.unrecorded ? " unrecorded" : ""))
+                        // UI tests: the loop's state.
+                        .accessibilityValue(t.held ? "held" : t.played ? "played" : "")
                         .padding()
                     Color.clear.frame(height: 1).id("end")
                 }

@@ -1,6 +1,5 @@
 # Builds the iOS app on a GitHub macOS runner, walks every flow on an iPhone 17 simulator (the phone replica, streaming
-# the bundled Cantonese clip through Silero, SenseVoice, OpenCC and the UI; the simulator has no Metal for MLX, so a
-# stand-in answers for Qwen3-ASR there, and model-check runs it on a Mac), then archives UNSIGNED and lets
+# the bundled Cantonese clip through Silero, SenseVoice, OpenCC and the UI, all real), then archives UNSIGNED and lets
 # the export cloud-sign with Apple's managed distribution certificate (App Store Connect API key) and upload to
 # TestFlight. The app has no server and no secrets.
 name: ios
@@ -37,7 +36,7 @@ jobs:
           key: model-${{ hashFiles('ios/fetch-model.sh') }}
       - name: Fetch the models
         run: |
-          [ -f Model/asr/model.safetensors ] && [ -f Model/sensevoice/model.int8.onnx ] || { pip3 install -q --break-system-packages huggingface_hub && ./fetch-model.sh; }
+          [ -f Model/sensevoice/model.int8.onnx ] || ./fetch-model.sh
           du -sh Model/*
       - name: Xcode, xcodegen
         env:
@@ -48,10 +47,9 @@ jobs:
           XCODE=$(ls -d /Applications/Xcode_*.app | grep -v -i beta | sort -V | tail -1)
           echo "Using $XCODE"; sudo xcode-select -s "$XCODE"; xcodebuild -version
           brew list xcodegen >/dev/null 2>&1 || brew install xcodegen
-          xcodebuild -downloadComponent MetalToolchain > /dev/null 2>&1 || true   # MLX's shaders
           sed -i '' "s/BUILD_NUMBER: \"1\"/BUILD_NUMBER: \"$BUILD_NUMBER\"/" project.yml
           xcodegen generate --quiet
-      # Xcode's build products (MLX and the other packages take most of a cold build, and on a busy runner a cold build
+      # Xcode's build products (the packages take most of a cold build, and on a busy runner a cold build
       # can outlast the step). Restored from the newest run with the same packages, saved after every run, even a failed
       # one, so a slow cold build keeps its progress.
       - name: Restore build products
@@ -87,7 +85,7 @@ jobs:
           ( sleep 1800; echo "watchdog: stopping xcodebuild" >> "$RUNNER_TEMP/test.log"; pkill -INT xcodebuild ) & WATCHDOG=$!
           mkdir -p "$RUNNER_TEMP/screens"
           COMMON=(-project Cantonese.xcodeproj -scheme Cantonese -configuration Release -destination "id=$UDID"
-            -derivedDataPath DerivedData -skipPackagePluginValidation -skipMacroValidation ONLY_ACTIVE_ARCH=YES ARCHS=arm64
+            -derivedDataPath DerivedData ONLY_ACTIVE_ARCH=YES ARCHS=arm64
             CODE_SIGN_IDENTITY=- CODE_SIGNING_REQUIRED=NO)
           xcodebuild build-for-testing "${COMMON[@]}" > "$RUNNER_TEMP/build.log" 2>&1 || true
           grep -E "error:|\*\* TEST BUILD" "$RUNNER_TEMP/build.log" | head -20 || true
@@ -132,7 +130,7 @@ jobs:
         run: |
           xcodebuild archive -project Cantonese.xcodeproj -scheme Cantonese -configuration Release -destination 'generic/platform=iOS' \
             -derivedDataPath DerivedData \
-            -archivePath "$RUNNER_TEMP/app.xcarchive" -skipPackagePluginValidation -skipMacroValidation CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" > "$RUNNER_TEMP/archive.log" 2>&1 || true
+            -archivePath "$RUNNER_TEMP/app.xcarchive" CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" > "$RUNNER_TEMP/archive.log" 2>&1 || true
           grep -E "error:|\*\* ARCHIVE" "$RUNNER_TEMP/archive.log" | head -40 || true
           grep -q "ARCHIVE SUCCEEDED" "$RUNNER_TEMP/archive.log"
       - name: Export, cloud-sign and upload to TestFlight

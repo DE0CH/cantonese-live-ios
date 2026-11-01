@@ -26,13 +26,9 @@
 "全部喺部 iPhone 度轉，唔使上網：聲音同文字都唔會離開部手機。" = "所有處理均在 iPhone 本機完成，無需上網，音訊與文字均不會離開裝置。";
 "開源元件" = "開源元件";
 "完成" = "完成";
-"語音辨識模型（Qwen 團隊；MLX 5-bit 版 aufklarer）" = "語音辨識模型（Qwen 團隊；MLX 5-bit 版本由 aufklarer 製作）";
-"喺 iPhone 度行模型（soniqo）" = "在 iPhone 上運行模型（soniqo）";
-"GPU 運算（Apple）" = "GPU 運算（Apple）";
-"模型檔案（Hugging Face）" = "模型檔案（Hugging Face）";
+"語音辨識模型（阿里巴巴 FunAudioLLM）" = "語音辨識模型（阿里巴巴 FunAudioLLM）";
 "轉香港繁體（DengXiang）" = "轉換為香港繁體（DengXiang）";
 "轉香港繁體（BYVoid）" = "轉換為香港繁體（BYVoid）";
-"灰色字幕嘅語音辨識模型（阿里巴巴 FunAudioLLM）" = "灰色字幕的語音辨識模型（阿里巴巴 FunAudioLLM）";
 "聽邊段係講嘢（Silero）" = "偵測語音片段（Silero）";
 "喺 iPhone 度行 SenseVoice 同 Silero（k2-fsa）" = "在 iPhone 上執行 SenseVoice 與 Silero（k2-fsa）";
 "CPU 運算（Microsoft）" = "CPU 運算（Microsoft）";

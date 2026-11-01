@@ -1,6 +1,6 @@
 # XcodeGen spec (CI runs `xcodegen generate`; the .xcodeproj is not committed). The app transcribes on the phone
-# (Silero and SenseVoice on the CPU through sherpa-onnx, Qwen3-ASR 1.7B on the GPU through MLX, shipped inside the app:
-# `./fetch-model.sh` puts them in Model/ first), so it has no server and no secrets.
+# (Silero and SenseVoice on the CPU through sherpa-onnx, shipped inside the app: `./fetch-model.sh` puts them in Model/
+# first), so it has no server and no secrets.
 name: Cantonese
 options:
   bundleIdPrefix: dev.de0ch
@@ -8,15 +8,9 @@ options:
   createIntermediateGroups: true
   developmentLanguage: zh-HK   # the strings in the code are 廣東話; App/Localization has 書面語, 简体 and English
 packages:
-  SpeechSwift:   # upstream soniqo/speech-swift (Qwen3-ASR on MLX)
-    url: https://github.com/soniqo/speech-swift
-    revision: d53bcb333882ebbd7444ae059b270127565594a0
   SherpaOnnx:    # Silero and SenseVoice on the CPU (ONNX Runtime)
     url: https://github.com/k2-fsa/sherpa-onnx
     exactVersion: 2.0.1
-  MLX:           # the version speech-swift resolves; the app only sets MLX's buffer cache limit
-    url: https://github.com/ml-explore/mlx-swift
-    from: 0.30.0
   SwiftyOpenCC:
     url: https://github.com/ddddxxx/SwiftyOpenCC
     revision: 1d8105a0f7199c90af722bff62728050c858e777
@@ -39,28 +33,16 @@ targets:
         buildPhase: resources
       - path: ../testdata/cantonese-16k.wav
         buildPhase: resources
-      - path: ../testdata/cantonese-16k.passes.json
-        buildPhase: resources
       - path: ../testdata/demo/demo-16k.wav
-        buildPhase: resources
-      - path: ../testdata/demo/demo-16k.passes.json
         buildPhase: resources
       - path: Model
         type: folder
         buildPhase: resources
     dependencies:
-      - package: SpeechSwift
-        product: Qwen3ASR
       - package: SherpaOnnx
         product: sherpa-onnx-shared   # dynamic: the static frameworks got embedded and failed signing at export
-      - package: MLX
-        product: MLX
       - package: SwiftyOpenCC
         product: OpenCC
-    entitlements:
-      path: App/Cantonese.entitlements
-      properties:
-        com.apple.developer.kernel.increased-memory-limit: true
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: dev.de0ch.cantonese
@@ -75,8 +57,8 @@ targets:
         ITSAppUsesNonExemptEncryption: false
         NSMicrophoneUsageDescription: 用咪收音，喺部手機度即時轉做廣東話字幕。
         UILaunchScreen: {}
-        # The models need about 2.7 GB of memory: only iPhones with 8 GB (iPhone 15 Pro and later) get the app, so no
-        # phone gets one it can't run (Deyao, 2026-10-28).
+        # Only iPhones with 8 GB (iPhone 15 Pro and later), as decided for Qwen3-ASR (Deyao, 2026-10-28); SenseVoice
+        # needs far less, but older phones haven't been tried.
         UIRequiredDeviceCapabilities: [iphone-performance-gaming-tier]
         # That capability makes iOS treat the app as a game and switch Game Mode on while it is open; it isn't one.
         GCSupportsGameMode: false

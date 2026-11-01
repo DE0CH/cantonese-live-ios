@@ -5,9 +5,8 @@ import os
 import UIKit
 
 /// Transcribes on the phone (Worker): Silero cuts the mic's 16 kHz audio at pauses, SenseVoice writes the grey text
-/// while someone speaks (CPU), Qwen3-ASR 1.7B writes each finished stretch in black (GPU). Nothing leaves the phone. iOS
-/// allows no GPU work in the background, so it works with the app on screen: the screen stays awake while listening,
-/// and leaving the app stops it.
+/// while someone speaks and each finished stretch in black. Nothing leaves the phone. It works with the app on screen:
+/// the screen stays awake while listening, and leaving the app stops it.
 @MainActor
 final class Transcriber: ObservableObject {
     enum State: Equatable { case idle, loading(String), listening, failed(String) }
@@ -19,8 +18,6 @@ final class Transcriber: ObservableObject {
     @Published var held = false
     /// UI tests: the whole test clip has gone in and the loop has caught up.
     @Published var played = false
-    /// UI tests: the stand-in was asked for a black run the recording doesn't have (TestClip.misses).
-    @Published var unrecorded = false
 
     var isRunning: Bool {
         switch state { case .loading, .listening: return true; default: return false }
@@ -40,19 +37,10 @@ final class Transcriber: ObservableObject {
     private var testAudio: Bool { testClip != nil }
 
     init() {
-        // The GPU is off limits in the background: leaving the app (or locking the phone) stops listening, and the
-        // model's work for that stop waits until the app is back.
+        // The app records only on screen: leaving it (or locking the phone) stops listening.
         NotificationCenter.default.addObserver(forName: UIApplication.didEnterBackgroundNotification, object: nil,
                                                queue: .main) { [weak self] _ in
-            MainActor.assumeIsolated {
-                Worker.suspendAll(true)
-                self?.stop()
-            }
-        }
-        // Back in the foreground only once active: GPU work is still refused while the app is entering the foreground.
-        NotificationCenter.default.addObserver(forName: UIApplication.didBecomeActiveNotification, object: nil,
-                                               queue: .main) { _ in
-            MainActor.assumeIsolated { Worker.suspendAll(false) }
+            MainActor.assumeIsolated { self?.stop() }
         }
     }
 
@@ -64,11 +52,7 @@ final class Transcriber: ObservableObject {
             do {
                 let worker = try await Worker.shared()
                 try Task.checkCancellation()
-                let test = self.testAudio
-                let latest = Latest<[Worker.Line]> { [weak self] lines in
-                    self?.lines = lines
-                    if test { self?.unrecorded = TestClip.misses.count > 0 }
-                }
+                let latest = Latest<[Worker.Line]> { [weak self] lines in self?.lines = lines }
                 worker.configure(onUpdate: { latest.send($0) })
                 worker.begin()
                 self.worker = worker
@@ -236,32 +220,15 @@ final class Transcriber: ObservableObject {
             await worker.play(clip.samples, pace: true, holds: clip.holds, holdFor: 8) { held in
                 Task { @MainActor in self?.held = held }
             }
-            if !Task.isCancelled {
-                self?.unrecorded = TestClip.misses.count > 0
-                self?.played = true
-            }
+            if !Task.isCancelled { self?.played = true }
         }
     }
 }
 
-/// A bundled 16 kHz mono clip the UI tests stream instead of the microphone, with every black run the app's loop made
-/// over it with the real models on a Mac (testdata/…passes.json, from tools/demo-passes in the model-check workflow):
-/// the simulator's stand-in for Qwen3-ASR answers with them. Silero and SenseVoice run for real in the simulator.
+/// A bundled 16 kHz mono clip the UI tests stream instead of the microphone (the simulator has no real mic); the models
+/// run for real on it.
 struct TestClip: Sendable {
-    /// One black run: the stretch's length and sum, the context it was given, the answer.
-    struct Run: Codable, Sendable { let audio: Int; let sum: Float; let context: String; let text: String }
-    struct Passes: Codable, Sendable { var runs: [Run] = [] }
-    /// Black runs the stand-in had no recorded answer for: the loop went another way than on the Mac (the recordings
-    /// are out of date), which the UI tests fail on.
-    final class Misses: @unchecked Sendable {
-        private let lock = NSLock()
-        private var n = 0
-        var count: Int { lock.lock(); defer { lock.unlock() }; return n }
-        func add() { lock.lock(); n += 1; lock.unlock() }
-    }
-    static let misses = Misses()
     let samples: [Float]
-    let passes: Passes
     /// CANTONESE_HOLD: the seconds of the clip (comma-separated) to stop at for a screenshot.
     var holds: [Double] {
         (ProcessInfo.processInfo.environment["CANTONESE_HOLD"] ?? "").split(separator: ",").compactMap { Double($0) }
@@ -269,31 +236,10 @@ struct TestClip: Sendable {
 
     /// CANTONESE_TEST_AUDIO: "1" streams the short test clip, "demo" the App Store demo conversation.
     static let current: TestClip? = ProcessInfo.processInfo.environment["CANTONESE_TEST_AUDIO"]
-        .flatMap { load($0 == "demo" ? "demo-16k" : "cantonese-16k") }
-
-    private static func load(_ name: String) -> TestClip? {
-        let file = { (n: String, e: String) in Bundle.main.url(forResource: n, withExtension: e).flatMap { try? Data(contentsOf: $0) } }
-        guard let samples = file(name, "wav").flatMap(Worker.samples(wav:)), let data = file(name + ".passes", "json")
-        else { return nil }
-        do { return TestClip(samples: samples, passes: try JSONDecoder().decode(Passes.self, from: data)) }
-        catch {
-            Worker.log.error("\(name, privacy: .public).passes.json is not in the current format (regenerate with tools/demo-passes): \(String(describing: error), privacy: .public)")
-            return nil
-        }
-    }
-
-    /// The simulator's stand-in for Qwen3-ASR: the real model's answer to this very run (same stretch and context).
-    static func standIn(_ passes: Passes) -> (_ audio: [Float], _ context: String) throws -> String {
-        { audio, context in
-            let sum = audio.reduce(0, +)
-            guard let r = passes.runs.first(where: { $0.audio == audio.count && $0.sum == sum && $0.context == context }) else {
-                Worker.log.error("black run not recorded: \(audio.count) samples after 「\(context, privacy: .public)」")
-                misses.add()
-                return ""
-            }
-            return r.text
-        }
-    }
+        .flatMap { Bundle.main.url(forResource: $0 == "demo" ? "demo-16k" : "cantonese-16k", withExtension: "wav") }
+        .flatMap { try? Data(contentsOf: $0) }
+        .flatMap(Worker.samples(wav:))
+        .map { TestClip(samples: $0) }
 }
 
 extension Worker {
@@ -301,9 +247,6 @@ extension Worker {
     @MainActor private static var loading: Task<Worker, Error>?
     /// The models are in memory: starting again is immediate.
     @MainActor static var loaded: Bool { cached != nil }
-
-    /// The app went to the background or came back: see `suspend`.
-    @MainActor static func suspendAll(_ on: Bool) { cached?.suspend(on) }
 
     /// Loads the models shipped inside the app (ios/fetch-model.sh puts them in Model/) once and keeps them. One load
     /// at a time: a start after a cancelled one waits for the load under way (which a cancel doesn't stop).
@@ -326,19 +269,10 @@ extension Worker {
         guard let dir = Bundle.main.url(forResource: "Model", withExtension: nil) else {
             throw CocoaError(.fileNoSuchFile)
         }
-        #if targetEnvironment(simulator)
-        let models = try await Models.load(dir, black: TestClip.standIn(TestClip.current?.passes ?? TestClip.Passes()))
-        #else
-        let models = try await Models.load(dir)
-        #endif
-        // Grey and black runs convert on their own queues; OpenCC's converter is used by one at a time.
-        let converter = try ChineseConverter(options: [.traditionalize, .hkStandard])
-        let lock = NSLock()
+        let models = Models.load(dir)
+        let converter = try ChineseConverter(options: [.traditionalize, .hkStandard])   // used on one queue only
         log.notice("models loaded")
-        return Worker(models: models, convert: { text in
-            lock.lock(); defer { lock.unlock() }
-            return converter.convert(text)
-        })
+        return Worker(models: models, convert: converter.convert)
     }
 }
 

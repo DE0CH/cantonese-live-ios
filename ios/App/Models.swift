@@ -1,44 +1,14 @@
 import Foundation
-#if canImport(SherpaOnnxShared)
-import SherpaOnnxShared   // the app: sherpa-onnx's dynamic frameworks (static ones get embedded unsigned and fail the export)
-#else
-import SherpaOnnx         // tools/demo-passes on a Mac
-#endif
-#if !targetEnvironment(simulator)
-import MLX
-import Qwen3ASR
-#endif
+import SherpaOnnxShared   // sherpa-onnx's dynamic frameworks (the static ones get embedded unsigned and fail the export)
 
-/// The models the app ships with, in Model/ (ios/fetch-model.sh):
-///   silero_vad.onnx   Silero speech detection (sherpa-onnx, CPU)
-///   sensevoice/       SenseVoice-Small int8 (sherpa-onnx, CPU): the grey text
-///   asr/              Qwen3-ASR 1.7B 5-bit (speech-swift on MLX, GPU): the black text
+/// The models the app ships with, in Model/ (ios/fetch-model.sh), both through sherpa-onnx on the CPU:
+///   silero_vad.onnx   Silero speech detection
+///   sensevoice/       SenseVoice-Small int8: the text
 extension Worker.Models {
-    static let qwenId = "aufklarer/Qwen3-ASR-1.7B-MLX-5bit"
-    /// MLX keeps freed buffers for reuse; a stretch's arrays need well under this, and speech-swift's default (a quarter
-    /// of the phone's memory, 2 GB) on top of the weights got the app killed.
-    static let mlxCacheLimit = 256 * 1024 * 1024
-
-    /// Silero and SenseVoice from `dir`, and Qwen3-ASR unless `black` stands in for it (the simulator has no Metal
-    /// for MLX).
-    static func load(_ dir: URL, black: ((_ audio: [Float], _ context: String) throws -> String)? = nil) async throws -> Worker.Models {
-        let segmenter = SileroSegmenter(model: dir.appendingPathComponent("silero_vad.onnx").path)
+    static func load(_ dir: URL) -> Worker.Models {
         let sense = SenseVoice(dir: dir.appendingPathComponent("sensevoice"))
-        if let black {
-            return Worker.Models(segmenter: segmenter, grey: sense.transcribe, black: black)
-        }
-        #if targetEnvironment(simulator)
-        throw CocoaError(.featureUnsupported)
-        #else
-        let qwen = try await Qwen3ASRModel.fromPretrained(
-            modelId: qwenId, cacheDir: dir.appendingPathComponent("asr"), offlineMode: true)
-        MLX.Memory.cacheLimit = mlxCacheLimit
-        return Worker.Models(segmenter: segmenter, grey: sense.transcribe, black: { audio, context in
-            var o = Qwen3DecodingOptions()
-            o.context = context
-            return try qwen.transcribeThrowing(audio: audio, sampleRate: Worker.rate, options: o)
-        })
-        #endif
+        return Worker.Models(segmenter: SileroSegmenter(model: dir.appendingPathComponent("silero_vad.onnx").path),
+                             transcribe: sense.transcribe)
     }
 }
 

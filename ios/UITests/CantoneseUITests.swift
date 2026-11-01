@@ -1,8 +1,7 @@
 import XCTest
 
-/// The phone replica: walks every flow on the simulator, streaming the bundled Cantonese clip instead of the mic. The
-/// simulator can't run MLX, so a stand-in answers for Qwen3-ASR (Transcriber.swift); the loop, Silero, SenseVoice,
-/// OpenCC and the UI are real.
+/// The phone replica: walks every flow on the simulator, streaming the bundled Cantonese clip instead of the mic; the
+/// models, the loop, OpenCC and the UI are all real.
 final class CantoneseUITests: XCTestCase {
     func testEveryFlow() throws {
         let app = XCUIApplication()
@@ -33,14 +32,12 @@ final class CantoneseUITests: XCTestCase {
         XCTAssertTrue(wait(60) { transcript.exists && transcript.label.contains("我哋") }, "no captions (\(status(app)))")
         shot(app, "transcribed")
         XCTAssertTrue(wait(60) { loop(transcript).hasPrefix("played") }, "the clip didn't finish playing")
-        XCTAssertFalse(loop(transcript).contains("unrecorded"), "the stand-in missed runs: regenerate the recordings")
 
         app.buttons["mic"].tap()                  // 停止: everything black
         XCTAssertTrue(app.buttons["開始"].waitForExistence(timeout: 10), "stop didn't stop")
         Thread.sleep(forTimeInterval: 1)
         let text = transcript.exists ? transcript.label : ""
         print("TRANSCRIPT: \(text)")
-        XCTAssertFalse(loop(transcript).contains("unrecorded"), "the stand-in missed the last run: regenerate the recordings")
         XCTAssertTrue(text.contains("我哋"), "lost the spoken form: \(text) (\(status(app)))")
         XCTAssertTrue(text.contains("飲茶"), "not HK Traditional: \(text)")
         app.buttons["clear"].tap()
@@ -50,10 +47,10 @@ final class CantoneseUITests: XCTestCase {
 
         // 關於: every licence the app ships with opens with its text.
         app.buttons["about"].tap()
-        let qwen = app.buttons["licence-Qwen3-ASR 1.7B"]
-        XCTAssertTrue(qwen.waitForExistence(timeout: 10), "about sheet didn't open")
+        let sherpa = app.buttons["licence-sherpa-onnx"]
+        XCTAssertTrue(sherpa.waitForExistence(timeout: 10), "about sheet didn't open")
         shot(app, "about")
-        qwen.tap()
+        sherpa.tap()
         XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label CONTAINS 'Apache License'")).firstMatch
                         .waitForExistence(timeout: 10), "licence text missing")
         app.navigationBars.buttons.element(boundBy: 0).tap()
@@ -86,8 +83,7 @@ final class CantoneseUITests: XCTestCase {
     }
 
     /// The App Store demo, once per store language (the app's 廣東話, 简体 and English): a first start, then the demo
-    /// conversation (testdata/demo) captioned live with the real model's answers (the stand-in replays every run
-    /// the app's loop made over it on a Mac, tools/demo-passes). The appstore workflow makes the store
+    /// conversation (testdata/demo) captioned live. The appstore workflow makes the store
     /// screenshots from its shots (tools/storeart): the clip stops twice (CANTONESE_HOLD, seconds into it), in the second
     /// sentence (only Cantonese said so far) and in the last (after English was mixed in), each showing grey text.
     static let holds = (chinese: 7.0, mixed: 27.0)
@@ -115,7 +111,6 @@ final class CantoneseUITests: XCTestCase {
         let transcript = app.staticTexts["transcript"]
         for shotName in ["demo-chinese", "demo-mixed"] {
             XCTAssertTrue(wait(60) { transcript.exists && loop(transcript).hasPrefix("held") }, "the loop didn't stop for \(shotName)")
-            XCTAssertFalse(loop(transcript).contains("unrecorded"), "the stand-in missed runs before \(shotName): regenerate the recordings")
             Thread.sleep(forTimeInterval: 0.5)   // the screen takes the newest lines every 0.1 s
             shot(app, "\(shotName)-\(name)")
             print("\(shotName)-\(name): \(transcript.label)")
@@ -126,9 +121,8 @@ final class CantoneseUITests: XCTestCase {
         app.buttons["mic"].tap()
         Thread.sleep(forTimeInterval: 2)
         let text = transcript.label
-        XCTAssertFalse(loop(transcript).contains("unrecorded"), "the stand-in missed runs: regenerate the recordings")
         print("DEMO TRANSCRIPT \(name): \(text)")
-        for words in ["Central", "proposal", "send"] { XCTAssertTrue(text.contains(words), "demo captions missing \(words): \(text)") }
+        for words in ["central", "proposal", "報告"] { XCTAssertTrue(text.contains(words), "demo captions missing \(words): \(text)") }
         app.terminate()
     }
 
@@ -142,7 +136,7 @@ final class CantoneseUITests: XCTestCase {
     }
 
     private func status(_ app: XCUIApplication) -> String { app.staticTexts["status"].label }
-    /// The transcript's value: "held" or "played" (or nothing), then " unrecorded" if the stand-in missed a run.
+    /// The transcript's value: "held" or "played" (or nothing).
     private func loop(_ transcript: XCUIElement) -> String { transcript.exists ? transcript.value as? String ?? "" : "" }
     private func state(_ app: XCUIApplication) -> String { app.staticTexts["status"].value as? String ?? "" }
 

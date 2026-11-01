@@ -20,7 +20,7 @@ App record 6826497735, bundle `dev.de0ch.cantonese`, version 1.0, the newest Tes
 | Support URL | https://github.com/DE0CH/cantonese-live-ios/issues |
 | App privacy | Data Not Collected |
 | Encryption | None (`ITSAppUsesNonExemptEncryption` = false) |
-| Content rights | Contains third-party content: yes (Qwen3-ASR, Apache 2.0; SenseVoice-Small, FunASR Model License; Silero VAD, MIT) |
+| Content rights | Contains third-party content: yes (SenseVoice-Small, FunASR Model License; Silero VAD, MIT) |
 | Sign-in for review | Not needed |
 
 ## Listing text
@@ -30,17 +30,17 @@ Description, keywords, promotional text, subtitle and name per localization live
 
 ## Review notes
 
-The app transcribes speech on the device and makes no network requests: Silero VAD finds speech, SenseVoice-Small (CPU)
-writes grey captions while someone speaks (refreshed at most every 0.5 s), and Qwen3-ASR 1.7B (MLX, on the GPU) writes
-each sentence in black once the speaker pauses. Nothing runs in silence. Loading the models takes a few seconds on the
-first tap.
-iOS does not allow GPU work in the background, so leaving the app stops listening. No account is needed.
+The app transcribes speech on the device and makes no network requests: Silero VAD finds speech and SenseVoice-Small
+(CPU) writes grey captions while someone speaks (refreshed at most every 0.5 s), then each sentence in black once the
+speaker pauses. Nothing runs in silence. Loading the models takes a few seconds on the first tap.
+Leaving the app stops listening. No account is needed.
 
 ## Devices
 
 Only iPhones with 8 GB of memory: `UIRequiredDeviceCapabilities` `iphone-performance-gaming-tier` (iPhone 15 Pro and
-later, every iPhone 16 and 17). The models need about 2.7 GB, and an app that may run out of memory on older phones is
-not offered there at all (Deyao, 2026-10-28). Apple does not let a later update drop a required capability's users the
+later, every iPhone 16 and 17), decided when the app ran Qwen3-ASR 1.7B (about 2.7 GB): an app that may run out of
+memory on older phones is not offered there at all (Deyao, 2026-10-28). SenseVoice needs far less, but older phones
+haven't been tried. Apple does not let a later update drop a required capability's users the
 other way round, so this floor can only be lowered, not raised, after release.
 
 ## Screenshots
@@ -51,5 +51,5 @@ and dark, the welcome sheet, 關於).
 
 ## Licences
 
-The 關於 sheet (ⓘ, top left) lists every open-source part shipped (Qwen3-ASR, speech-swift, sherpa-onnx, swift-transformers,
-OpenCC: Apache 2.0; SenseVoice-Small: FunASR Model License; Silero VAD, ONNX Runtime, MLX, MLX Swift, SwiftyOpenCC: MIT) with its licence text (`ios/App/Licences/`).
+The 關於 sheet (ⓘ, top left) lists every open-source part shipped (sherpa-onnx,
+OpenCC: Apache 2.0; SenseVoice-Small: FunASR Model License; Silero VAD, ONNX Runtime, SwiftyOpenCC: MIT) with its licence text (`ios/App/Licences/`).
