@@ -14,10 +14,9 @@ on:
       upload: { type: boolean, default: false }
       device: { type: string, default: "iPhone 17" }
       appearance: { type: string, default: light }
-  push:
-    branches: [main]
+  push:  # every branch (the gate merges a branch when this is green); main alone uploads
     paths: ["ios/**", "testdata/**", ".github/workflows/ios.yml"]
-concurrency: { group: "ios-${{ github.workflow }}-${{ inputs.appearance || 'light' }}", cancel-in-progress: false }
+concurrency: { group: "ios-${{ github.ref }}-${{ github.workflow }}-${{ inputs.appearance || 'light' }}", cancel-in-progress: false }
 permissions: { contents: read }
 defaults:
   run:
@@ -126,7 +125,7 @@ jobs:
             ${{ runner.temp }}/test.log
           if-no-files-found: ignore
       - name: Archive (unsigned)
-        if: (github.event_name == 'push' && github.workflow == 'ios') || inputs.upload   # never from the appstore workflow's replica
+        if: (github.event_name == 'push' && github.workflow == 'ios' && github.ref == 'refs/heads/main') || inputs.upload   # never from the appstore workflow's replica
         run: |
           xcodebuild archive -project Cantonese.xcodeproj -scheme Cantonese -configuration Release -destination 'generic/platform=iOS' \
             -derivedDataPath DerivedData \
@@ -134,7 +133,7 @@ jobs:
           grep -E "error:|\*\* ARCHIVE" "$RUNNER_TEMP/archive.log" | head -40 || true
           grep -q "ARCHIVE SUCCEEDED" "$RUNNER_TEMP/archive.log"
       - name: Export, cloud-sign and upload to TestFlight
-        if: (github.event_name == 'push' && github.workflow == 'ios') || inputs.upload   # never from the appstore workflow's replica
+        if: (github.event_name == 'push' && github.workflow == 'ios' && github.ref == 'refs/heads/main') || inputs.upload   # never from the appstore workflow's replica
         env:
           ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
           ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
