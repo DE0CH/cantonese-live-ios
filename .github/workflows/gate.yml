@@ -25,11 +25,11 @@ jobs:
         id: bin
         run: |
           set -e
-          pin="$(curl -fsSL "$PIN_URL")"
+          pin="$(curl -fsSL "$PIN_URL" || true)"
           sum="${pin%% *}"; url="${pin#* }"
-          if [ "$sum" = unreleased ]; then
-            # the gate's first install: nothing is decided until gate-release.yml has published it
-            echo "::warning::the gate is not released yet (rust/gate/pin.txt: unreleased)"
+          if [ -z "$pin" ] || [ "$sum" = unreleased ]; then
+            # before the gate's first release (or before its pin is on main) nothing is decided
+            echo "::warning::the gate is not released yet ($PIN_URL is missing or says unreleased)"
             echo ready=0 >> "$GITHUB_OUTPUT"
             exit 0
           fi
@@ -54,11 +54,11 @@ jobs:
         id: bin
         run: |
           set -e
-          pin="$(curl -fsSL "$PIN_URL")"
+          pin="$(curl -fsSL "$PIN_URL" || true)"
           sum="${pin%% *}"; url="${pin#* }"
-          if [ "$sum" = unreleased ]; then
-            # the gate's first install: nothing is decided until gate-release.yml has published it
-            echo "::warning::the gate is not released yet (rust/gate/pin.txt: unreleased)"
+          if [ -z "$pin" ] || [ "$sum" = unreleased ]; then
+            # before the gate's first release (or before its pin is on main) nothing is decided
+            echo "::warning::the gate is not released yet ($PIN_URL is missing or says unreleased)"
             echo ready=0 >> "$GITHUB_OUTPUT"
             exit 0
           fi
